@@ -123,6 +123,7 @@ erDiagram
     USER {
         bigint id
         bigint chat_id
+        bigint telegram_user_id
         datetime created_at
     }
 
@@ -155,7 +156,7 @@ erDiagram
 
 ### `User`
 
-Пользователь Telegram. В MVP он определяется по уникальному `chat_id`. Логин, пароль и email не нужны.
+Пользователь Telegram. В MVP определяется по `chat_id` (lookup бота) и `telegram_user_id` (`message.from_user.id`). Логин, пароль и email не нужны.
 
 ### `Task`
 
@@ -424,6 +425,7 @@ tg_reminder/
     admin.py
     apps.py
     migrations/
+    repositories/
     bot/
       app.py
       handlers/
@@ -508,7 +510,7 @@ tg_reminder/
 - микросервисы;
 - отдельный REST API между ботом и backend;
 - отдельный сервис для каждого действия с задачей;
-- repository layer для каждой модели;
+- тяжёлый generic repository или отдельный data-access класс на каждое микро-действие;
 - несколько STT-провайдеров;
 - локальные LLM;
 - хранение аудио навсегда;

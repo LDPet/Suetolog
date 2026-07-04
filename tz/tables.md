@@ -1,6 +1,8 @@
 User 
 - id (pk)
-- chat_id 
+- chat_id (unique)
+- telegram_user_id (unique)
+- created_at
 
 Task
 - id
@@ -11,7 +13,7 @@ Task
 - repeat_interval
 - status
 - created_at
-- uid
+- user_id (FK → User)
 
 Reminder
 - id
@@ -19,12 +21,13 @@ Reminder
 - sent_time
 - reaction
 - message_id
-- task_id
+- task_id (FK → Task)
 
 TaskEvent
-- task_id
+- id
+- task_id (FK → Task)
 - event_type
+- message_id (nullable)   # Telegram message_id; для undated_card_sent, evening_question_sent и т.п.
 - created_at
 
-
-index + uniq
+index + uniq — в тикетах DB-01..DB-04 per model
