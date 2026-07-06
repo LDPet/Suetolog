@@ -70,6 +70,19 @@ isort .
 
 Компонентная диаграмма: `[ARCHITECTURE.drawio](ARCHITECTURE.drawio)`.
 
+## Инфраструктура для разработки
+
+Запуск PostgreSQL и Redis:
+
+```bash
+make up
+docker compose ps # убедиться, что контейнеры запустились и статус healthy
+```
+Остановка:
+```bash
+make down
+```
+
 ## Процесс разработки
 
 Команда ведёт работу через **Kanban-доску GitHub Projects** репозитория и pull request'ы в `main`. Полный список задач, оценок и зависимостей — в `[decomp.md](decomp.md)`; тексты тикетов — в каталоге `[issues/](issues/)`.
