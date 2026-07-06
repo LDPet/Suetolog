@@ -15,19 +15,11 @@ Telegram-бот для проекта стажировки Иви-2026: поль
 
 ## Быстрый старт
 
-Кодовая часть проекта ещё не добавлена в репозиторий, поэтому команды ниже — целевой шаблон. После появления `manage.py`, файла зависимостей, `.env.example` и `docker-compose.yml` нужно заменить `TODO` на точные команды.
-
 ```bash
-git clone <repo-url>
-cd Suetolog
+make install
+make test
+make check
 
-# TODO: выбрать файл зависимостей: requirements.txt или pyproject.toml
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-
-# TODO: создать .env.example и скопировать его
 cp .env.example .env
 ```
 

@@ -1,0 +1,25 @@
+# Environment
+.env
+
+# Virtualenv
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Django
+*.log
+local_settings.py
+db.sqlite3
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+

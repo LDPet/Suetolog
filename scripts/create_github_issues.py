@@ -27,9 +27,7 @@ from typing import Iterable
 
 TICKET_ID_RE = re.compile(r"^[A-Z]+(?:-QA)?-\d+$")
 TICKET_TOKEN_RE = re.compile(r"\b([A-Z]+(?:-QA)?-\d+)\b")
-RANGE_RE = re.compile(
-    r"\b([A-Z]+(?:-QA)?)-(\d+)\.\.([A-Z]+(?:-QA)?)-(\d+)\b"
-)
+RANGE_RE = re.compile(r"\b([A-Z]+(?:-QA)?)-(\d+)\.\.([A-Z]+(?:-QA)?)-(\d+)\b")
 MARKER_RE = re.compile(r"<!--\s*suetolog-ticket:\s*([A-Z]+(?:-QA)?-\d+)\s*-->")
 
 EPIC_MILESTONES: dict[str, str] = {
@@ -108,7 +106,8 @@ def ticket_prefix(ticket_id: str) -> str:
 
 
 def parse_field(content: str, field_name: str) -> str | None:
-    match = re.search(rf"^{re.escape(field_name)}:\s*(.+)$", content, re.MULTILINE)
+    match = re.search(rf"^{re.escape(field_name)}:\s*(.+)$", content,
+                      re.MULTILINE)
     if not match:
         return None
     return match.group(1).strip()
@@ -118,16 +117,20 @@ def expand_ticket_range(start_id: str, end_id: str) -> list[str]:
     start_prefix, start_num = start_id.rsplit("-", 1)
     end_prefix, end_num = end_id.rsplit("-", 1)
     if start_prefix != end_prefix:
-        raise ValueError(f"Диапазон с разными префиксами: {start_id}..{end_id}")
+        raise ValueError(
+            f"Диапазон с разными префиксами: {start_id}..{end_id}")
     width = max(len(start_num), len(end_num))
     start_i = int(start_num)
     end_i = int(end_num)
     if start_i > end_i:
         start_i, end_i = end_i, start_i
-    return [f"{start_prefix}-{num:0{width}d}" for num in range(start_i, end_i + 1)]
+    return [
+        f"{start_prefix}-{num:0{width}d}" for num in range(start_i, end_i + 1)
+    ]
 
 
-def parse_dependencies(raw: str | None, known_tickets: set[str]) -> tuple[list[str], list[str]]:
+def parse_dependencies(raw: str | None,
+                       known_tickets: set[str]) -> tuple[list[str], list[str]]:
     if not raw or raw.strip().lower() in {"нет", "—", "-", "none", "n/a"}:
         return [], []
 
@@ -201,7 +204,10 @@ def topological_sort(
     """
     spec_ids = {spec.ticket_id for spec in specs}
     in_degree: dict[str, int] = {ticket_id: 0 for ticket_id in spec_ids}
-    dependents: dict[str, list[str]] = {ticket_id: [] for ticket_id in spec_ids}
+    dependents: dict[str, list[str]] = {
+        ticket_id: []
+        for ticket_id in spec_ids
+    }
 
     for spec in specs:
         for dep in spec.dependencies:
@@ -211,9 +217,7 @@ def topological_sort(
             dependents[dep].append(spec.ticket_id)
 
     ready = [
-        ticket_id
-        for ticket_id, degree in in_degree.items()
-        if degree == 0
+        ticket_id for ticket_id, degree in in_degree.items() if degree == 0
     ]
     ready.sort(key=lambda tid: (wave_rank(tid, wave_ranks), tid))
 
@@ -222,8 +226,8 @@ def topological_sort(
         current = ready.pop(0)
         order.append(current)
         for dependent in sorted(
-            dependents[current],
-            key=lambda tid: (wave_rank(tid, wave_ranks), tid),
+                dependents[current],
+                key=lambda tid: (wave_rank(tid, wave_ranks), tid),
         ):
             in_degree[dependent] -= 1
             if in_degree[dependent] == 0:
@@ -232,10 +236,8 @@ def topological_sort(
 
     if len(order) != len(spec_ids):
         remaining = sorted(spec_ids - set(order))
-        raise ValueError(
-            "Цикл или неразрешимые зависимости между тикетами: "
-            + ", ".join(remaining)
-        )
+        raise ValueError("Цикл или неразрешимые зависимости между тикетами: " +
+                         ", ".join(remaining))
 
     return order
 
@@ -270,7 +272,8 @@ def build_labels(ticket_id: str, epic_prefix: str) -> list[str]:
     return deduped
 
 
-def parse_issue_file(path: Path, issues_dir: Path, known_tickets: set[str]) -> IssueSpec:
+def parse_issue_file(path: Path, issues_dir: Path,
+                     known_tickets: set[str]) -> IssueSpec:
     content = path.read_text(encoding="utf-8")
     title_match = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
     if not title_match:
@@ -291,14 +294,12 @@ def parse_issue_file(path: Path, issues_dir: Path, known_tickets: set[str]) -> I
     dependencies, unresolved = parse_dependencies(deps_raw, known_tickets)
 
     marker = f"<!-- suetolog-ticket: {ticket_id} -->"
-    header = textwrap.dedent(
-        f"""\
+    header = textwrap.dedent(f"""\
         {marker}
 
         > Источник: `{rel_path}`
 
-        """
-    )
+        """)
     body = header + content.strip() + "\n"
 
     return IssueSpec(
@@ -314,7 +315,13 @@ def parse_issue_file(path: Path, issues_dir: Path, known_tickets: set[str]) -> I
     )
 
 
-def run_gh(args: list[str], *, repo: str | None, dry_run: bool, input_text: str | None = None) -> subprocess.CompletedProcess[str] | None:
+def run_gh(
+        args: list[str],
+        *,
+        repo: str | None,
+        dry_run: bool,
+        input_text: str | None = None
+) -> subprocess.CompletedProcess[str] | None:
     cmd = ["gh", *args]
     if repo:
         cmd.extend(["--repo", repo])
@@ -346,7 +353,8 @@ def run_gh(args: list[str], *, repo: str | None, dry_run: bool, input_text: str 
         check=False,
     )
     if result.returncode != 0:
-        raise GhError(result.stderr.strip() or result.stdout.strip() or "gh command failed")
+        raise GhError(result.stderr.strip() or result.stdout.strip()
+                      or "gh command failed")
     return result
 
 
@@ -354,7 +362,10 @@ def detect_repo(explicit: str | None) -> str:
     if explicit:
         return explicit
     result = subprocess.run(
-        ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+        [
+            "gh", "repo", "view", "--json", "nameWithOwner", "-q",
+            ".nameWithOwner"
+        ],
         text=True,
         capture_output=True,
         check=False,
@@ -372,8 +383,7 @@ def detect_repo(explicit: str | None) -> str:
     if remote.returncode != 0 or not remote.stdout.strip():
         raise GhError(
             "Не удалось определить репозиторий. Укажите --repo owner/name "
-            "или выполните gh auth login в корне git-репозитория."
-        )
+            "или выполните gh auth login в корне git-репозитория.")
 
     url = remote.stdout.strip()
     match = re.search(r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/.]+)", url)
@@ -385,7 +395,9 @@ def detect_repo(explicit: str | None) -> str:
 def gh_json(args: list[str], *, repo: str, dry_run: bool) -> list[dict]:
     if dry_run:
         return []
-    result = run_gh([*args, "--json", "number,title,url,labels,body"], repo=repo, dry_run=False)
+    result = run_gh([*args, "--json", "number,title,url,labels,body"],
+                    repo=repo,
+                    dry_run=False)
     assert result is not None
     return json.loads(result.stdout or "[]")
 
@@ -394,7 +406,9 @@ def load_existing_issues(repo: str, dry_run: bool) -> dict[str, CreatedIssue]:
     if dry_run:
         return {}
 
-    issues = gh_json(["issue", "list", "--state", "all", "--limit", "1000"], repo=repo, dry_run=False)
+    issues = gh_json(["issue", "list", "--state", "all", "--limit", "1000"],
+                     repo=repo,
+                     dry_run=False)
     mapping: dict[str, CreatedIssue] = {}
 
     for issue in issues:
@@ -409,7 +423,8 @@ def load_existing_issues(repo: str, dry_run: bool) -> dict[str, CreatedIssue]:
             if marker_match:
                 ticket_id = marker_match.group(1)
         if not ticket_id:
-            title_match = re.match(r"^([A-Z]+(?:-QA)?-\d+):", issue.get("title", ""))
+            title_match = re.match(r"^([A-Z]+(?:-QA)?-\d+):",
+                                   issue.get("title", ""))
             if title_match:
                 ticket_id = title_match.group(1)
         if ticket_id and ticket_id not in mapping:
@@ -446,7 +461,8 @@ def ensure_label(repo: str, label: str, dry_run: bool) -> None:
         capture_output=True,
         check=False,
     )
-    if create.returncode != 0 and "already exists" not in (create.stderr or "").lower():
+    if create.returncode != 0 and "already exists" not in (create.stderr
+                                                           or "").lower():
         raise GhError(create.stderr.strip() or create.stdout.strip())
 
 
@@ -487,7 +503,9 @@ def ensure_milestone(repo: str, title: str, dry_run: bool) -> None:
 
 
 def create_issue(spec: IssueSpec, repo: str, dry_run: bool) -> CreatedIssue:
-    print(f"{'[dry-run] ' if dry_run else ''}issue {spec.ticket_id}: {spec.title}")
+    print(
+        f"{'[dry-run] ' if dry_run else ''}issue {spec.ticket_id}: {spec.title}"
+    )
 
     if dry_run:
         print(f"  labels: {', '.join(spec.labels)}")
@@ -496,7 +514,9 @@ def create_issue(spec: IssueSpec, repo: str, dry_run: bool) -> CreatedIssue:
         if spec.dependencies:
             print(f"  depends on: {', '.join(spec.dependencies)}")
         if spec.unresolved_dependencies:
-            print(f"  unresolved deps: {', '.join(spec.unresolved_dependencies)}")
+            print(
+                f"  unresolved deps: {', '.join(spec.unresolved_dependencies)}"
+            )
         return CreatedIssue(
             ticket_id=spec.ticket_id,
             number=0,
@@ -548,7 +568,8 @@ def get_existing_blocked_by(
         return set()
 
     result = run_gh(
-        ["issue", "view", str(issue_number), "--json", "blockedBy"],
+        ["issue", "view",
+         str(issue_number), "--json", "blockedBy"],
         repo=repo,
         dry_run=False,
     )
@@ -582,7 +603,9 @@ def add_native_blocked_by(
     existing = get_existing_blocked_by(repo, issue.number, dry_run)
     to_add = sorted({num for num in blocker_numbers if num not in existing})
     if not to_add:
-        print(f"skip native blocks for {spec.ticket_id} -> #{issue.number} (already set)")
+        print(
+            f"skip native blocks for {spec.ticket_id} -> #{issue.number} (already set)"
+        )
         return
 
     blockers_csv = ",".join(str(num) for num in to_add)
@@ -623,22 +646,18 @@ def add_native_blocked_by(
         return
 
     combined = f"{result.stderr}\n{result.stdout}".lower()
-    if any(
-        phrase in combined
-        for phrase in (
+    if any(phrase in combined for phrase in (
             "already",
             "exists",
             "duplicate",
             "nothing to add",
-        )
-    ):
-        print(
-            f"note: native blocked-by for {spec.ticket_id} already present "
-            f"(gh: {(result.stderr or result.stdout).strip()})"
-        )
+    )):
+        print(f"note: native blocked-by for {spec.ticket_id} already present "
+              f"(gh: {(result.stderr or result.stdout).strip()})")
         return
 
-    raise GhError(result.stderr.strip() or result.stdout.strip() or "gh issue edit failed")
+    raise GhError(result.stderr.strip() or result.stdout.strip()
+                  or "gh issue edit failed")
 
 
 def apply_native_blocked_by(
@@ -686,8 +705,7 @@ def render_blocked_by_section(
     lines.append(
         "> Native GitHub **Blocked by** выставляются скриптом через "
         "`gh issue edit --add-blocked-by`. Секция ниже — дублирующий ориентир "
-        "с ticket ID и номерами issues."
-    )
+        "с ticket ID и номерами issues.")
     lines.append("")
     return "\n".join(lines)
 
@@ -706,7 +724,9 @@ def update_issue_body(
     body = strip_blocked_by_section(spec.body)
     body = body.rstrip() + "\n\n" + blocked_by
 
-    print(f"{'[dry-run] ' if dry_run else ''}update links for {spec.ticket_id} -> #{issue.number}")
+    print(
+        f"{'[dry-run] ' if dry_run else ''}update links for {spec.ticket_id} -> #{issue.number}"
+    )
     run_gh(
         ["issue", "edit", str(issue.number), "--body", body],
         repo=repo,
@@ -720,7 +740,9 @@ def collect_specs(issues_dir: Path) -> list[IssueSpec]:
         (path.parent.name if path.name == "README.md" else path.stem)
         for path in files
     }
-    return [parse_issue_file(path, issues_dir, known_tickets) for path in files]
+    return [
+        parse_issue_file(path, issues_dir, known_tickets) for path in files
+    ]
 
 
 def print_creation_plan(
@@ -728,15 +750,18 @@ def print_creation_plan(
     wave_ranks: dict[str, int],
 ) -> None:
     topo = topological_sort(ordered_specs, wave_ranks)
-    print("Creation order (reverse topo → backlog top = earliest wave with Newest first):")
+    print(
+        "Creation order (reverse topo → backlog top = earliest wave with Newest first):"
+    )
     for index, spec in enumerate(ordered_specs, start=1):
         deps = ", ".join(spec.dependencies) if spec.dependencies else "—"
         print(f"  {index:3d}. {spec.ticket_id}  (depends: {deps})")
-    print(f"Topological order (dependencies first): {' → '.join(topo[:8])}"
-          + (" → …" if len(topo) > 8 else ""))
+    print(f"Topological order (dependencies first): {' → '.join(topo[:8])}" +
+          (" → …" if len(topo) > 8 else ""))
 
 
-def ensure_metadata(repo: str, specs: Iterable[IssueSpec], dry_run: bool) -> None:
+def ensure_metadata(repo: str, specs: Iterable[IssueSpec],
+                    dry_run: bool) -> None:
     labels: set[str] = set()
     milestones: set[str] = set()
     for spec in specs:
@@ -754,8 +779,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Создать GitHub Issues из markdown-файлов issues/.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=textwrap.dedent(
-            """\
+        epilog=textwrap.dedent("""\
             Примеры:
               python3 scripts/create_github_issues.py --dry-run
               python3 scripts/create_github_issues.py --repo my-org/Suetolog
@@ -764,8 +788,7 @@ def main() -> int:
 
             Порядок создания — обратная топологическая сортировка зависимостей,
             чтобы при сортировке Issues «Newest first» ранние волны были сверху.
-            """
-        ),
+            """),
     )
     parser.add_argument(
         "--issues-dir",
@@ -795,7 +818,8 @@ def main() -> int:
     parser.add_argument(
         "--update-links",
         action="store_true",
-        help="Только обновить секцию Blocked by и native blocked-by у существующих issues",
+        help=
+        "Только обновить секцию Blocked by и native blocked-by у существующих issues",
     )
     parser.add_argument(
         "--skip-native-blocks",
@@ -821,7 +845,8 @@ def main() -> int:
 
     wave_ranks = load_wave_ranks(args.decomp)
     if wave_ranks:
-        print(f"Wave ranks loaded from {args.decomp}: {len(wave_ranks)} tickets")
+        print(
+            f"Wave ranks loaded from {args.decomp}: {len(wave_ranks)} tickets")
     else:
         print(f"Wave ranks not loaded ({args.decomp}); tie-break by ticket ID")
 
@@ -857,7 +882,9 @@ def main() -> int:
     if not args.update_links:
         for spec in ordered_specs:
             if spec.ticket_id in created and created[spec.ticket_id].number:
-                print(f"skip existing {spec.ticket_id} -> #{created[spec.ticket_id].number}")
+                print(
+                    f"skip existing {spec.ticket_id} -> #{created[spec.ticket_id].number}"
+                )
                 continue
             issue = create_issue(spec, repo, args.dry_run)
             created[spec.ticket_id] = issue
@@ -880,7 +907,9 @@ def main() -> int:
     for spec in ordered_specs:
         issue = created.get(spec.ticket_id)
         if not issue:
-            print(f"warn: issue for {spec.ticket_id} not found, skip link update", file=sys.stderr)
+            print(
+                f"warn: issue for {spec.ticket_id} not found, skip link update",
+                file=sys.stderr)
             continue
         update_issue_body(spec, issue, created, repo, args.dry_run)
 
