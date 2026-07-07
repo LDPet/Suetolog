@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: Pipfile.lock
+
+      - run: python -m pip install --upgrade pip pipenv
+
+      - run: pipenv sync --dev
+
+      - name: Build
+        run: pipenv run python manage.py check
+
+      - name: Lint
+        run: |
+          pipenv run isort --check .
+          pipenv run yapf --diff --recursive .
+
+      - name: Tests
+        run: pipenv run pytest
