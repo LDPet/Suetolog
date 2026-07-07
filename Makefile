@@ -1,10 +1,14 @@
-.PHONY: install check test format up down migrate
+.PHONY: install check lint test format up down migrate
 
 install:
 	pipenv install --dev
 
 check:
 	python manage.py check
+
+lint:
+	pipenv run isort --check .
+	pipenv run yapf --diff --recursive .
 
 test:
 	pipenv run pytest
