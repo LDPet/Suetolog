@@ -1,21 +1,26 @@
-.PHONY: install check lint test format up down migrate
+.PHONY: install check lint test format fix up down migrate
+
+PIPENV = pipenv
+PY_FILES := $(shell git ls-files '*.py')
 
 install:
-	pipenv install --dev
+	$(PIPENV) install --dev
 
 check:
-	python manage.py check
+	$(PIPENV) run python manage.py check
 
 lint:
-	pipenv run isort --check .
-	pipenv run yapf --diff --recursive .
+	$(PIPENV) run isort --check $(PY_FILES)
+	$(PIPENV) run yapf --diff $(PY_FILES)
 
 test:
-	pipenv run pytest
+	$(PIPENV) run pytest
 
 format:
-	pipenv run isort .
-	pipenv run yapf --in-place --recursive .
+	$(PIPENV) run isort $(PY_FILES)
+	$(PIPENV) run yapf --in-place $(PY_FILES)
+
+fix: format
 
 
 up:
