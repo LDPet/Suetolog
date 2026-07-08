@@ -5,11 +5,13 @@ name = "pypi"
 
 [packages]
 django = "~=4.2.0"
+psycopg2-binary = "~=2.9"
 
 [dev-packages]
 pytest = "*"
 isort = "*"
 yapf = "*"
+pytest-django = "*"
 
 [requires]
 python_version = "3.12"

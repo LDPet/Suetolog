@@ -1,4 +1,4 @@
-.PHONY: install check test format up down
+.PHONY: install check test format up down migrate
 
 install:
 	pipenv install --dev
@@ -20,3 +20,5 @@ down:
 	docker compose down
 logs:
 	docker compose logs -f
+migrate:
+	python manage.py migrate
