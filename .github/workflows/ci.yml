@@ -45,13 +45,11 @@ jobs:
 
       - run: pipenv sync --dev
 
-      - name: Build
-        run: pipenv run python manage.py check
+      - name: Check
+        run: make check
 
       - name: Lint
-        run: |
-          pipenv run isort --check .
-          pipenv run yapf --diff --recursive .
+        run: make lint
 
       - name: Tests
-        run: pipenv run pytest
+        run: make test
