@@ -1,12 +1,12 @@
 from reminder.models import User
 
+
 class UserRepository:
+
     @staticmethod
     def create(chat_id: int, telegram_user_id: int) -> User:
-        return User.objects.create(
-            chat_id=chat_id,
-            telegram_user_id=telegram_user_id
-        )
+        return User.objects.create(chat_id=chat_id,
+                                   telegram_user_id=telegram_user_id)
 
     @staticmethod
     def get_by_chat_id(chat_id: int) -> User | None:

@@ -1,5 +1,6 @@
 from django.db import models
 
+
 class User(models.Model):
     # django автоматически добавляет id = BigAutoFeild
     chat_id = models.BigIntegerField(unique=True)
