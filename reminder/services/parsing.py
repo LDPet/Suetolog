@@ -18,6 +18,7 @@ class ParserErrorCode:
 
 
 class ParserError(ValueError):
+
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
@@ -63,9 +64,9 @@ class MockTaskParser:
         "двадцать три": 23,
     }
     _WORD_TIME_RE = re.compile(
-        r"\bв\s+(?P<hour_word>"
-        + "|".join(sorted(map(re.escape, _HOUR_WORDS), key=len, reverse=True))
-        + r")(?:\s*(?:час|часа|часов))?\b",
+        r"\bв\s+(?P<hour_word>" +
+        "|".join(sorted(map(re.escape, _HOUR_WORDS), key=len, reverse=True)) +
+        r")(?:\s*(?:час|часа|часов))?\b",
         re.IGNORECASE,
     )
     _WEEKDAYS = {
@@ -82,7 +83,9 @@ class MockTaskParser:
     }
     _NOISE_WORDS = {"а", "м", "мм", "ммм", "э", "ээ", "эээ", "эм", "ну", "шум"}
 
-    def parse_task(self, text: str, now: datetime | None = None) -> ParsedTaskInput:
+    def parse_task(self,
+                   text: str,
+                   now: datetime | None = None) -> ParsedTaskInput:
         raw_text = (text or "").strip()
         normalized = self._normalize(raw_text)
 
@@ -208,7 +211,9 @@ class MockTaskParser:
 
     def _is_unparseable_title(self, title: str) -> bool:
         tokens = re.findall(r"[а-яa-z0-9]+", title)
-        meaningful_tokens = [token for token in tokens if token not in self._NOISE_WORDS]
+        meaningful_tokens = [
+            token for token in tokens if token not in self._NOISE_WORDS
+        ]
         return len(meaningful_tokens) < 2
 
     def _normalize(self, text: str) -> str:
@@ -229,6 +234,7 @@ class MockTaskParser:
 
 
 class YandexTaskParser:
+
     def __init__(self):
         raise ParserConfigurationError(
             "PARSER_BACKEND=yandex is not available until AI-03 is implemented."
@@ -236,9 +242,8 @@ class YandexTaskParser:
 
 
 def get_parser(backend: str | None = None) -> TaskParser:
-    selected_backend = (
-        backend or getattr(settings, "PARSER_BACKEND", "mock")
-    ).strip().lower()
+    selected_backend = (backend or getattr(settings, "PARSER_BACKEND",
+                                           "mock")).strip().lower()
 
     if selected_backend == "mock":
         return MockTaskParser()
@@ -248,5 +253,4 @@ def get_parser(backend: str | None = None) -> TaskParser:
 
     raise ParserConfigurationError(
         "Unsupported PARSER_BACKEND="
-        f"{selected_backend!r}. Expected 'mock' or 'yandex'."
-    )
+        f"{selected_backend!r}. Expected 'mock' or 'yandex'.")
