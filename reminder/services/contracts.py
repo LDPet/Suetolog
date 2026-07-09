@@ -10,9 +10,8 @@ from reminder.services.dto import ParsedTaskInput
 
 
 class TaskParser(Protocol):
-    def parse_task(
-            self,
-            text: str,
-            now: datetime | None = None
-    ) -> ParsedTaskInput:
+
+    def parse_task(self,
+                   text: str,
+                   now: datetime | None = None) -> ParsedTaskInput:
         ...
