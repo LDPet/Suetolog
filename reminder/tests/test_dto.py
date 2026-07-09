@@ -20,25 +20,21 @@ def test_parsed_task_input_can_be_created_with_required_fields():
 
 
 def test_parsed_task_input_accepts_due_to_relative_to_now():
-
     now = datetime(2026, 7, 10, 12, 0)
     due_to = now + timedelta(days=3)
 
     parsed = ParsedTaskInput(
-
         title="Позвонить врачу",
-
         raw_text="Напомни через три дня позвонить врачу",
-
         due_to=due_to,
-
     )
 
     assert parsed.due_to == datetime(2026, 7, 13, 12, 0)
 
 
 def test_empty_title_is_invalid():
-    with pytest.raises(ValueError, match="Название задачи не может быть пустым"):
+    with pytest.raises(ValueError,
+                       match="Название задачи не может быть пустым"):
         ParsedTaskInput(
             title="",
             raw_text="Напомни завтра позвонить врачу",
@@ -46,7 +42,8 @@ def test_empty_title_is_invalid():
 
 
 def test_blank_title_is_invalid():
-    with pytest.raises(ValueError, match="Название задачи не может быть пустым"):
+    with pytest.raises(ValueError,
+                       match="Название задачи не может быть пустым"):
         ParsedTaskInput(
             title="   ",
             raw_text="Напомни завтра позвонить врачу",
@@ -54,7 +51,8 @@ def test_blank_title_is_invalid():
 
 
 def test_empty_raw_text_is_invalid():
-    with pytest.raises(ValueError, match="Исходный текст задачи не может быть пустым"):
+    with pytest.raises(ValueError,
+                       match="Исходный текст задачи не может быть пустым"):
         ParsedTaskInput(
             title="Позвонить врачу",
             raw_text="",
@@ -62,7 +60,8 @@ def test_empty_raw_text_is_invalid():
 
 
 def test_blank_raw_text_is_invalid():
-    with pytest.raises(ValueError, match="Исходный текст задачи не может быть пустым"):
+    with pytest.raises(ValueError,
+                       match="Исходный текст задачи не может быть пустым"):
         ParsedTaskInput(
             title="Позвонить врачу",
             raw_text="   ",
@@ -70,7 +69,8 @@ def test_blank_raw_text_is_invalid():
 
 
 def test_repeat_interval_requires_repeat_type():
-    with pytest.raises(ValueError, match="Интервал повтора задан без типа повтора"):
+    with pytest.raises(ValueError,
+                       match="Интервал повтора задан без типа повтора"):
         ParsedTaskInput(
             title="Тренировка",
             raw_text="Напомни каждые 2 дня тренироваться",
@@ -79,7 +79,8 @@ def test_repeat_interval_requires_repeat_type():
 
 
 def test_repeat_type_requires_repeat_interval():
-    with pytest.raises(ValueError, match="Тип повтора указан без интервала повтора"):
+    with pytest.raises(ValueError,
+                       match="Тип повтора указан без интервала повтора"):
         ParsedTaskInput(
             title="Тренировка",
             raw_text="Напомни каждую неделю тренироваться",
@@ -88,7 +89,8 @@ def test_repeat_type_requires_repeat_interval():
 
 
 def test_repeat_interval_must_be_positive():
-    with pytest.raises(ValueError, match="Интервал повтора не может быть меньше 1"):
+    with pytest.raises(ValueError,
+                       match="Интервал повтора не может быть меньше 1"):
         ParsedTaskInput(
             title="Тренировка",
             raw_text="Напомни каждую неделю тренироваться",
