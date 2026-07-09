@@ -23,6 +23,9 @@ DATABASES = {
 }
 
 TIME_ZONE = "Europe/Moscow"
+DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE", TIME_ZONE)
 USE_TZ = True
+
+PARSER_BACKEND = os.getenv("PARSER_BACKEND", "mock")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
