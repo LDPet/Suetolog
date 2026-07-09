@@ -2,13 +2,9 @@ from datetime import datetime
 
 import pytest
 
-from reminder.services.parsing import (
-    MockTaskParser,
-    ParserConfigurationError,
-    ParserError,
-    ParserErrorCode,
-    get_parser,
-)
+from reminder.services.parsing import (MockTaskParser,
+                                       ParserConfigurationError, ParserError,
+                                       ParserErrorCode, get_parser)
 
 
 def test_mock_parser_parses_task_without_date():
