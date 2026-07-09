@@ -29,7 +29,7 @@ class TaskRepository:
     @staticmethod
     def get_active_by_user(user) -> list[Task]:
         return list(
-            Task.objects.filter(user=user).exclude(
-                status=Task.Status.DELETED).order_by("-created_at"))
+            Task.objects.filter(user=user).filter(
+                status=Task.Status.ACTIVE).order_by("-created_at"))
 
     # Другие методы появятся в CORE-03
