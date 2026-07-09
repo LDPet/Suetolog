@@ -32,7 +32,7 @@ class Task(models.Model):
         choices=RepeatType.choices,
         null=True,
         blank=True,
-        default=None,
+        default=RepeatType.DAILY,
     )
     repeat_interval = models.PositiveIntegerField(null=True, blank=True)
     status = models.CharField(
