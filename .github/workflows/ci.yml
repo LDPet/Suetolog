@@ -10,6 +10,28 @@ jobs:
   ci:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: suetolog_db
+          POSTGRES_USER: suetolog_user
+          POSTGRES_PASSWORD: suetolog_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U suetolog_user -d suetolog_db"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      POSTGRES_DB: suetolog_db
+      POSTGRES_USER: suetolog_user
+      POSTGRES_PASSWORD: suetolog_pass
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: 5432
+
     steps:
       - uses: actions/checkout@v4
 
