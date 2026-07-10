@@ -15,3 +15,9 @@ class TaskParser(Protocol):
                    text: str,
                    now: datetime | None = None) -> ParsedTaskInput:
         ...
+
+
+class DateParser(Protocol):
+
+    def parse_date(self, text: str, now: datetime | None = None) -> datetime:
+        ...
