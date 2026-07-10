@@ -82,10 +82,12 @@ def test_get_parser_returns_mock_for_default_backend(settings):
     assert isinstance(get_parser(), MockTaskParser)
 
 
-def test_get_parser_raises_configuration_error_for_yandex_until_ai03(settings):
+def test_get_parser_requires_yandex_credentials(settings):
     settings.PARSER_BACKEND = "yandex"
+    settings.YANDEX_API_KEY = ""
+    settings.YANDEX_FOLDER_ID = ""
 
-    with pytest.raises(ParserConfigurationError, match="AI-03"):
+    with pytest.raises(ParserConfigurationError, match="YANDEX_API_KEY"):
         get_parser()
 
 

@@ -112,6 +112,12 @@ MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 PARSER_BACKEND = os.getenv("PARSER_BACKEND", "mock")
+YANDEX_API_KEY = os.getenv("YANDEX_API_KEY", "")
+YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID", "")
+YANDEX_GPT_MODEL = os.getenv("YANDEX_GPT_MODEL", "yandexgpt-lite")
+YANDEX_GPT_TEMPERATURE = float(os.getenv("YANDEX_GPT_TEMPERATURE", "0.1"))
+YANDEX_GPT_MAX_TOKENS = int(os.getenv("YANDEX_GPT_MAX_TOKENS", "1000"))
+YANDEX_GPT_TIMEOUT_SEC = int(os.getenv("YANDEX_GPT_TIMEOUT_SEC", "30"))
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
