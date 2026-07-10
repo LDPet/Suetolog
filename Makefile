@@ -6,17 +6,17 @@ PY_FILES := $(shell git ls-files '*.py')
 install:
 	$(PIPENV) install --dev
 
-check:
+check: install
 	$(PIPENV) run python manage.py check
 
-lint:
+lint: install
 	$(PIPENV) run isort --check $(PY_FILES)
 	$(PIPENV) run yapf --diff $(PY_FILES)
 
-test:
+test: install
 	$(PIPENV) run pytest
 
-format:
+format: install
 	$(PIPENV) run isort $(PY_FILES)
 	$(PIPENV) run yapf --in-place $(PY_FILES)
 
