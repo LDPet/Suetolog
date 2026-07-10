@@ -55,3 +55,26 @@ class Task(models.Model):
 
     def __str__(self):
         return f"Task({self.title}, {self.status}, user={self.user_id}, repeat_type={self.repeat_type}, repeat_interval={self.repeat_interval})"
+
+
+class Reminder(models.Model):
+    task = models.ForeignKey(
+        Task,
+        on_delete=models.CASCADE,
+        related_name="reminders",
+    )
+    reminder_time = models.DateTimeField()
+    sent_time = models.DateTimeField(null=True, blank=True)
+    reaction = models.CharField(max_length=10, null=True, blank=True)
+    message_id = models.BigIntegerField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["reminder_time"]),
+            models.Index(fields=["sent_time"]),
+            models.Index(fields=["message_id"]),
+            models.Index(fields=["task"]),
+        ]
+
+    def __str__(self):
+        return f"Reminder(task={self.task_id}, at={self.reminder_time}, reaction={self.reaction})"
