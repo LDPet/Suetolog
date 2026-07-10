@@ -66,13 +66,12 @@ class Reminder(models.Model):
     reminder_time = models.DateTimeField()
     sent_time = models.DateTimeField(null=True, blank=True)
     reaction = models.CharField(max_length=10, null=True, blank=True)
-    message_id = models.BigIntegerField(null=True, blank=True)
+    message_id = models.BigIntegerField(null=True, blank=True, unique=True)
 
     class Meta:
         indexes = [
             models.Index(fields=["reminder_time"]),
             models.Index(fields=["sent_time"]),
-            models.Index(fields=["message_id"]),
             models.Index(fields=["task"]),
         ]
 
