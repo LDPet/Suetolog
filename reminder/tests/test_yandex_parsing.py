@@ -6,7 +6,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from reminder.services.parsing import (YANDEX_GENERATION_JSON_SCHEMA,
+from reminder.services.parsing import (DATE_GENERATION_JSON_SCHEMA,
+                                       YANDEX_GENERATION_JSON_SCHEMA,
                                        ParserError, ParserErrorCode,
                                        YandexFoundationModelsClient,
                                        YandexGPTTaskParser, get_parser)
@@ -241,7 +242,8 @@ def test_get_parser_returns_yandex_parser(settings):
     assert isinstance(get_parser(), YandexGPTTaskParser)
 
 
-def test_yandex_client_sends_expected_request(monkeypatch):
+@pytest.mark.parametrize("custom_schema", [None, DATE_GENERATION_JSON_SCHEMA])
+def test_yandex_client_sends_expected_request(monkeypatch, custom_schema):
     requests = []
 
     def fake_urlopen(request, timeout):
@@ -258,7 +260,7 @@ def test_yandex_client_sends_expected_request(monkeypatch):
         timeout=30,
     )
 
-    result = client.complete("system prompt", "user text")
+    result = client.complete("system prompt", "user text", custom_schema)
 
     request, timeout = requests[0]
     body = json.loads(request.data.decode("utf-8"))
@@ -286,7 +288,7 @@ def test_yandex_client_sends_expected_request(monkeypatch):
             },
         ],
         "jsonSchema": {
-            "schema": YANDEX_GENERATION_JSON_SCHEMA,
+            "schema": custom_schema or YANDEX_GENERATION_JSON_SCHEMA,
         },
     }
 

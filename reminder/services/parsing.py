@@ -1,4 +1,4 @@
-"""Task parser implementations and backend factory."""
+"""Task/date parser implementations and backend factory."""
 
 from __future__ import annotations
 
@@ -85,6 +85,18 @@ YANDEX_GENERATION_JSON_SCHEMA = {
     },
 }
 
+DATE_GENERATION_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "due_to": {
+            "type": ["string", "null"],
+            "description": "ISO 8601 datetime в переданном timezone или null",
+        },
+    },
+    "required": ["due_to"],
+    "additionalProperties": False,
+}
+
 
 class YandexFoundationModelsClient:
     ENDPOINT = (
@@ -107,7 +119,11 @@ class YandexFoundationModelsClient:
         self._max_tokens = max_tokens
         self._timeout = timeout
 
-    def complete(self, system_prompt: str, user_text: str) -> str:
+    def complete(self,
+                 system_prompt: str,
+                 user_text: str,
+                 json_schema: dict | None = None) -> str:
+        response_schema = json_schema or YANDEX_GENERATION_JSON_SCHEMA
         payload = {
             "modelUri":
             f"gpt://{self._folder_id}/{self._model}",
@@ -127,7 +143,7 @@ class YandexFoundationModelsClient:
                 },
             ],
             "jsonSchema": {
-                "schema": YANDEX_GENERATION_JSON_SCHEMA,
+                "schema": response_schema,
             },
         }
         response_body = self._post_with_retry(payload)
@@ -401,7 +417,7 @@ class MockTaskParser:
         return datetime.now(ZoneInfo(timezone_name))
 
 
-class YandexGPTTaskParser:
+class _YandexGPTParserBase:
 
     def __init__(self,
                  client: YandexFoundationModelsClient | None = None,
@@ -418,6 +434,56 @@ class YandexGPTTaskParser:
                 "DEFAULT_TIMEZONE is not a valid timezone.") from error
 
         self._client = client or self._client_from_settings()
+
+    def _client_from_settings(self) -> YandexFoundationModelsClient:
+        api_key = getattr(settings, "YANDEX_API_KEY", "").strip()
+        folder_id = getattr(settings, "YANDEX_FOLDER_ID", "").strip()
+
+        if not api_key or not folder_id:
+            raise ParserConfigurationError(
+                "PARSER_BACKEND=yandex requires YANDEX_API_KEY and "
+                "YANDEX_FOLDER_ID.")
+
+        return YandexFoundationModelsClient(
+            api_key=api_key,
+            folder_id=folder_id,
+            model=getattr(settings, "YANDEX_GPT_MODEL", "yandexgpt-lite"),
+            temperature=getattr(settings, "YANDEX_GPT_TEMPERATURE", 0.1),
+            max_tokens=getattr(settings, "YANDEX_GPT_MAX_TOKENS", 1000),
+            timeout=getattr(settings, "YANDEX_GPT_TIMEOUT_SEC", 30),
+        )
+
+    def _parse_datetime(self, value: str | None) -> datetime | None:
+        if value is None:
+            return None
+
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as error:
+            raise ParserError(
+                ParserErrorCode.PARSER_FAILED,
+                "YandexGPT returned an invalid due_to value.",
+            ) from error
+
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ParserError(
+                ParserErrorCode.PARSER_FAILED,
+                "YandexGPT returned due_to without a timezone.",
+            )
+
+        return parsed.astimezone(self._timezone)
+
+    def _resolve_now(self, now: datetime | None) -> datetime:
+        if now is None:
+            return datetime.now(self._timezone)
+
+        if now.tzinfo is None or now.utcoffset() is None:
+            return now.replace(tzinfo=self._timezone)
+
+        return now.astimezone(self._timezone)
+
+
+class YandexGPTTaskParser(_YandexGPTParserBase):
 
     def parse_task(self,
                    text: str,
@@ -469,24 +535,6 @@ class YandexGPTTaskParser:
                 ParserErrorCode.PARSER_FAILED,
                 "YandexGPT returned inconsistent task fields.",
             ) from error
-
-    def _client_from_settings(self) -> YandexFoundationModelsClient:
-        api_key = getattr(settings, "YANDEX_API_KEY", "").strip()
-        folder_id = getattr(settings, "YANDEX_FOLDER_ID", "").strip()
-
-        if not api_key or not folder_id:
-            raise ParserConfigurationError(
-                "PARSER_BACKEND=yandex requires YANDEX_API_KEY and "
-                "YANDEX_FOLDER_ID.")
-
-        return YandexFoundationModelsClient(
-            api_key=api_key,
-            folder_id=folder_id,
-            model=getattr(settings, "YANDEX_GPT_MODEL", "yandexgpt-lite"),
-            temperature=getattr(settings, "YANDEX_GPT_TEMPERATURE", 0.1),
-            max_tokens=getattr(settings, "YANDEX_GPT_MAX_TOKENS", 1000),
-            timeout=getattr(settings, "YANDEX_GPT_TIMEOUT_SEC", 30),
-        )
 
     def _build_system_prompt(self, now: datetime) -> str:
         schema = json.dumps(YANDEX_GENERATION_JSON_SCHEMA,
@@ -601,36 +649,142 @@ JSON Schema:
         return True
 
     def _parse_due_to(self, value: str | None) -> datetime | None:
-        if value is None:
-            return None
+        return self._parse_datetime(value)
 
-        try:
-            due_to = datetime.fromisoformat(value)
-        except ValueError as error:
+
+class YandexGPTDateParser(_YandexGPTParserBase):
+    _ONLY_TIME_RE = re.compile(
+        r"^(?:в\s+)?(?:[01]?\d|2[0-3])"
+        r"(?::[0-5]\d)?"
+        r"(?:\s*(?:час|часа|часов))?$",
+        re.IGNORECASE,
+    )
+
+    def parse_date(self, text: str, now: datetime | None = None) -> datetime:
+        if not isinstance(text, str) or not text.strip():
             raise ParserError(
                 ParserErrorCode.PARSER_FAILED,
-                "YandexGPT returned an invalid due_to value.",
-            ) from error
-
-        if due_to.tzinfo is None or due_to.utcoffset() is None:
-            raise ParserError(
-                ParserErrorCode.PARSER_FAILED,
-                "YandexGPT returned due_to without a timezone.",
+                "Date text is empty.",
             )
 
-        return due_to.astimezone(self._timezone)
+        current = self._resolve_now(now)
+        model_response = self._client.complete(
+            self._build_system_prompt(current),
+            text,
+            DATE_GENERATION_JSON_SCHEMA,
+        )
+        payload = self._decode_and_validate(model_response)
 
-    def _resolve_now(self, now: datetime | None) -> datetime:
-        if now is None:
-            return datetime.now(self._timezone)
+        if payload["due_to"] is None:
+            raise ParserError(
+                ParserErrorCode.PARSER_FAILED,
+                "YandexGPT could not recognize a date.",
+            )
 
-        if now.tzinfo is None or now.utcoffset() is None:
-            return now.replace(tzinfo=self._timezone)
+        due_to = self._parse_datetime(payload["due_to"])
+        if due_to is None:
+            raise ParserError(
+                ParserErrorCode.PARSER_FAILED,
+                "YandexGPT could not recognize a date.",
+            )
 
-        return now.astimezone(self._timezone)
+        if due_to < current and self._ONLY_TIME_RE.fullmatch(text.strip()):
+            due_to += timedelta(days=1)
+
+        if due_to < current:
+            raise ParserError(
+                ParserErrorCode.DATE_IN_PAST,
+                "Parsed date is in the past.",
+            )
+
+        return due_to
+
+    def _build_system_prompt(self, now: datetime) -> str:
+        schema = json.dumps(DATE_GENERATION_JSON_SCHEMA,
+                            ensure_ascii=False,
+                            separators=(",", ":"))
+        tomorrow_at_fifteen = (now + timedelta(days=1)).replace(
+            hour=15,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        in_thirty_minutes = now + timedelta(minutes=30)
+
+        def next_weekday_at(weekday: int, hour: int = 0) -> datetime:
+            result = (now +
+                      timedelta(days=(weekday - now.weekday()) % 7)).replace(
+                          hour=hour, minute=0, second=0, microsecond=0)
+            if result < now:
+                result += timedelta(days=7)
+            return result
+
+        next_monday_at_nine = next_weekday_at(0, 9)
+        next_friday = next_weekday_at(4)
+        days_since_monday = (now.weekday() - 0) % 7 or 7
+        previous_monday_at_nine = (now -
+                                   timedelta(days=days_since_monday)).replace(
+                                       hour=9,
+                                       minute=0,
+                                       second=0,
+                                       microsecond=0)
+        return f"""Ты преобразуешь русский текст, содержащий только дату или время, в datetime.
+Не извлекай задачу, title или description. Верни только чистый JSON без Markdown и пояснений.
+Текущие дата и время: {now.isoformat()}. Часовой пояс: {self._timezone_name}.
+
+Правила:
+- due_to — ISO 8601 datetime с UTC offset в часовом поясе {self._timezone_name}.
+- Разрешай "сегодня", "завтра", "послезавтра", дни недели и относительные интервалы через now.
+- День недели означает ближайшее подходящее наступление, которое ещё не прошло. Проверь, что weekday в due_to соответствует названному дню: понедельник=0, вторник=1, среда=2, четверг=3, пятница=4, суббота=5, воскресенье=6.
+- Если указан только час без дня, выбери ближайшее такое время: сегодня, если оно не раньше now, иначе завтра.
+- Если указана дата без времени, используй 00:00:00 как маркер отсутствия точного времени.
+- Для явной прошедшей даты верни вычисленный datetime; приложение само отклонит её.
+- Для нулевого или отрицательного относительного интервала верни due_to=null.
+- Для несуществующей календарной даты или времени, например "31 февраля" или "25:00", верни due_to=null. Не исправляй такую дату на ближайшую существующую.
+- Для неопределённого или мусорного ввода, например "asdf" или "потом", верни due_to=null.
+
+JSON Schema:
+{schema}
+
+Примеры для текущего времени выше:
+"завтра в 15:00" -> {{"due_to":"{tomorrow_at_fifteen.isoformat()}"}}
+"в понедельник в 9" -> {{"due_to":"{next_monday_at_nine.isoformat()}"}}
+"в пятницу" -> {{"due_to":"{next_friday.isoformat()}"}}
+"в пятницу в 00:00" -> {{"due_to":"{next_friday.isoformat()}"}}
+"прошлый понедельник в 9" -> {{"due_to":"{previous_monday_at_nine.isoformat()}"}}
+"через 30 минут" -> {{"due_to":"{in_thirty_minutes.isoformat()}"}}
+"через 0 минут" -> {{"due_to":null}}
+"31 февраля в 10" -> {{"due_to":null}}
+"потом" -> {{"due_to":null}}"""
+
+    @staticmethod
+    def _decode_and_validate(model_response: str) -> dict:
+        try:
+            payload = json.loads(model_response)
+        except (TypeError, json.JSONDecodeError) as error:
+            raise ParserError(
+                ParserErrorCode.PARSER_FAILED,
+                "YandexGPT returned invalid date JSON.",
+            ) from error
+
+        if not isinstance(payload, dict) or set(payload) != {"due_to"}:
+            raise ParserError(
+                ParserErrorCode.PARSER_FAILED,
+                "YandexGPT response does not match the date schema.",
+            )
+
+        if payload["due_to"] is not None and not isinstance(
+                payload["due_to"], str):
+            raise ParserError(
+                ParserErrorCode.PARSER_FAILED,
+                "YandexGPT response does not match the date schema.",
+            )
+
+        return payload
 
 
 YandexTaskParser = YandexGPTTaskParser
+YandexDateParser = YandexGPTDateParser
 
 
 def get_parser(backend: str | None = None) -> TaskParser:
