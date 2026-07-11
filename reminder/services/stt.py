@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import socket
 import time
 import urllib.error
@@ -13,6 +14,8 @@ from pathlib import Path
 from django.conf import settings
 
 from reminder.services.dto import STTResult
+
+logger = logging.getLogger(__name__)
 
 
 class STTErrorCode:
@@ -25,10 +28,17 @@ class STTError(RuntimeError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+        if code == STTErrorCode.STT_EMPTY:
+            logger.info("SpeechKit: %s", message)
+        else:
+            logger.warning("SpeechKit: %s", message)
 
 
 class STTConfigurationError(RuntimeError):
-    pass
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        logger.error("SpeechKit configuration: %s", message)
 
 
 class YandexSpeechKitSTTService:
@@ -71,6 +81,8 @@ class YandexSpeechKitSTTService:
         try:
             audio = Path(audio_path).read_bytes()
         except (OSError, TypeError, ValueError) as error:
+            logger.exception(
+                "Не удалось прочитать аудиофайл для SpeechKit: %s", audio_path)
             raise self._failed_error() from error
 
         response_body = self._post_with_retry(audio)
@@ -79,9 +91,16 @@ class YandexSpeechKitSTTService:
             transcript = payload["result"]
         except (KeyError, TypeError, UnicodeDecodeError,
                 json.JSONDecodeError) as error:
+            logger.error(
+                "SpeechKit вернул невалидный ответ: %s",
+                response_body[:500],
+                exc_info=error,
+            )
             raise self._failed_error() from error
 
         if not isinstance(transcript, str):
+            logger.error("SpeechKit вернул transcript не-строку: %r",
+                         transcript)
             raise self._failed_error()
 
         transcript = transcript.strip()
@@ -90,6 +109,8 @@ class YandexSpeechKitSTTService:
                 STTErrorCode.STT_EMPTY,
                 "SpeechKit returned an empty transcript.",
             )
+
+        logger.info("SpeechKit transcript: %s", transcript)
 
         return STTResult(
             text=transcript,
@@ -121,20 +142,57 @@ class YandexSpeechKitSTTService:
                                             timeout=self._timeout) as response:
                     return response.read()
             except urllib.error.HTTPError as error:
-                error.close()
+                body = error.read().decode("utf-8", errors="replace")[:500]
                 if 500 <= error.code < 600 and attempt == 0:
+                    logger.warning(
+                        "SpeechKit HTTP %s (попытка %s), повтор: %s",
+                        error.code,
+                        attempt + 1,
+                        body,
+                    )
+                    error.close()
                     time.sleep(self.RETRY_DELAY_SEC)
                     continue
+                logger.error(
+                    "SpeechKit HTTP %s (попытка %s): %s",
+                    error.code,
+                    attempt + 1,
+                    body,
+                    exc_info=error,
+                )
+                error.close()
                 raise self._failed_error() from error
             except (TimeoutError, socket.timeout) as error:
                 if attempt == 0:
+                    logger.warning(
+                        "SpeechKit timeout (попытка %s), повтор",
+                        attempt + 1,
+                        exc_info=error,
+                    )
                     time.sleep(self.RETRY_DELAY_SEC)
                     continue
+                logger.error(
+                    "SpeechKit timeout (попытка %s)",
+                    attempt + 1,
+                    exc_info=error,
+                )
                 raise self._failed_error() from error
             except urllib.error.URLError as error:
                 if self._is_timeout(error) and attempt == 0:
+                    logger.warning(
+                        "SpeechKit сетевая ошибка (попытка %s), повтор: %s",
+                        attempt + 1,
+                        error.reason,
+                        exc_info=error,
+                    )
                     time.sleep(self.RETRY_DELAY_SEC)
                     continue
+                logger.error(
+                    "SpeechKit сетевая ошибка (попытка %s): %s",
+                    attempt + 1,
+                    error.reason,
+                    exc_info=error,
+                )
                 raise self._failed_error() from error
 
         raise self._failed_error()
@@ -145,6 +203,7 @@ class YandexSpeechKitSTTService:
 
     @staticmethod
     def _failed_error() -> STTError:
+        logger.error("SpeechKit: все попытки запроса исчерпаны")
         return STTError(
             STTErrorCode.STT_FAILED,
             "Yandex SpeechKit is unavailable.",

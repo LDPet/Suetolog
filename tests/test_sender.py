@@ -14,15 +14,22 @@ class TestTelegramSender:
         mock_bot.send_message.assert_called_once_with(chat_id=123456,
                                                       text="Hello, World!\n\n")
 
+    @pytest.mark.parametrize("error_code", [
+        ErrorCode.VOICE_TOO_LONG,
+        ErrorCode.VOICE_TOO_LARGE,
+        ErrorCode.STT_EMPTY,
+        ErrorCode.PARSER_FAILED,
+        ErrorCode.DATE_IN_PAST,
+        ErrorCode.GENERIC,
+    ])
     @pytest.mark.asyncio
-    async def test_send_error(self, sender, mock_bot):
-        await sender.send_error(123456, ErrorCode.VOICE_TOO_LARGE)
+    async def test_send_error(self, sender, mock_bot, error_code):
+        await sender.send_error(123456, error_code)
 
         mock_bot.send_message.assert_called_once()
         call_args = mock_bot.send_message.call_args[1]
         assert call_args["chat_id"] == 123456
-        assert call_args[
-            "text"] == f"{error_messages[ErrorCode.VOICE_TOO_LARGE]}\n\n"
+        assert call_args["text"] == f"{error_messages[error_code]}\n\n"
 
     @pytest.mark.asyncio
     async def test_send_welcome(self, sender, mock_bot):
