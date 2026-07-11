@@ -4,9 +4,16 @@
 """
 
 from datetime import datetime
+from pathlib import Path
 from typing import Protocol
 
-from reminder.services.dto import ParsedTaskInput
+from reminder.services.dto import ParsedTaskInput, STTResult
+
+
+class STTService(Protocol):
+
+    def transcribe(self, audio_path: str | Path) -> STTResult:
+        ...
 
 
 class TaskParser(Protocol):
