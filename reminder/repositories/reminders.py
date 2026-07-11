@@ -41,3 +41,18 @@ class ReminderRepository:
         reminder.reaction = reaction
         reminder.save(update_fields=['reaction'])
         return reminder
+
+    @staticmethod
+    def replace_pending_for_task(
+            task, reminder_time: datetime | None) -> Reminder | None:
+        Reminder.objects.filter(task=task, sent_time__isnull=True).delete()
+        if reminder_time is None:
+            return None
+        return ReminderRepository.create(task=task,
+                                         reminder_time=reminder_time)
+
+    @staticmethod
+    def delete_pending_for_task(task) -> int:
+        deleted_count, _ = Reminder.objects.filter(
+            task=task, sent_time__isnull=True).delete()
+        return deleted_count
