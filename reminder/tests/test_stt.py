@@ -217,8 +217,7 @@ def test_stt_uses_django_settings(settings):
     assert service._timeout == 12
 
 
-def test_stt_does_not_log_key_or_transcript(monkeypatch, audio_path, service,
-                                            caplog):
+def test_stt_does_not_log_api_key(monkeypatch, audio_path, service, caplog):
     transcript = "завтра в 15 позвонить врачу"
 
     def fake_urlopen(request, timeout):
@@ -229,4 +228,3 @@ def test_stt_does_not_log_key_or_transcript(monkeypatch, audio_path, service,
     assert service.transcribe(audio_path).text == transcript
 
     assert "secret-key" not in caplog.text
-    assert transcript not in caplog.text

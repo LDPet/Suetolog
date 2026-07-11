@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import socket
 import urllib.error
@@ -15,6 +16,8 @@ from django.conf import settings
 from reminder.services.contracts import TaskParser
 from reminder.services.dto import ParsedTaskInput
 
+logger = logging.getLogger(__name__)
+
 
 class ParserErrorCode:
     PARSER_FAILED = "parser_failed"
@@ -26,10 +29,17 @@ class ParserError(ValueError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+        if code == ParserErrorCode.DATE_IN_PAST:
+            logger.info("Parser validation: %s", message)
+        else:
+            logger.warning("Parser validation: %s", message)
 
 
 class ParserConfigurationError(RuntimeError):
-    pass
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        logger.error("Parser configuration: %s", message)
 
 
 TASK_JSON_SCHEMA = {
@@ -153,6 +163,11 @@ class YandexFoundationModelsClient:
             text = response["result"]["alternatives"][0]["message"]["text"]
         except (KeyError, IndexError, TypeError, UnicodeDecodeError,
                 json.JSONDecodeError) as error:
+            logger.error(
+                "YandexGPT вернул невалидный ответ: %s",
+                response_body[:500],
+                exc_info=error,
+            )
             raise ParserError(
                 ParserErrorCode.PARSER_FAILED,
                 "YandexGPT returned an invalid response.",
@@ -185,17 +200,54 @@ class YandexFoundationModelsClient:
                                             timeout=self._timeout) as response:
                     return response.read()
             except urllib.error.HTTPError as error:
-                error.close()
+                body = error.read().decode("utf-8", errors="replace")[:500]
                 if 500 <= error.code < 600 and attempt == 0:
+                    logger.warning(
+                        "YandexGPT HTTP %s (попытка %s), повтор: %s",
+                        error.code,
+                        attempt + 1,
+                        body,
+                    )
+                    error.close()
                     continue
+                logger.error(
+                    "YandexGPT HTTP %s (попытка %s): %s",
+                    error.code,
+                    attempt + 1,
+                    body,
+                    exc_info=error,
+                )
+                error.close()
                 raise self._api_error() from error
             except (TimeoutError, socket.timeout) as error:
                 if attempt == 0:
+                    logger.warning(
+                        "YandexGPT timeout (попытка %s), повтор",
+                        attempt + 1,
+                        exc_info=error,
+                    )
                     continue
+                logger.error(
+                    "YandexGPT timeout (попытка %s)",
+                    attempt + 1,
+                    exc_info=error,
+                )
                 raise self._api_error() from error
             except urllib.error.URLError as error:
                 if self._is_timeout(error) and attempt == 0:
+                    logger.warning(
+                        "YandexGPT сетевая ошибка (попытка %s), повтор: %s",
+                        attempt + 1,
+                        error.reason,
+                        exc_info=error,
+                    )
                     continue
+                logger.error(
+                    "YandexGPT сетевая ошибка (попытка %s): %s",
+                    attempt + 1,
+                    error.reason,
+                    exc_info=error,
+                )
                 raise self._api_error() from error
 
         raise self._api_error()
@@ -206,6 +258,7 @@ class YandexFoundationModelsClient:
 
     @staticmethod
     def _api_error() -> ParserError:
+        logger.error("YandexGPT: все попытки запроса исчерпаны")
         return ParserError(
             ParserErrorCode.PARSER_FAILED,
             "YandexGPT is temporarily unavailable.",
@@ -430,6 +483,10 @@ class _YandexGPTParserBase:
         try:
             self._timezone = ZoneInfo(self._timezone_name)
         except (KeyError, TypeError) as error:
+            logger.exception(
+                "Невалидный DEFAULT_TIMEZONE: %s",
+                self._timezone_name,
+            )
             raise ParserConfigurationError(
                 "DEFAULT_TIMEZONE is not a valid timezone.") from error
 
@@ -460,6 +517,11 @@ class _YandexGPTParserBase:
         try:
             parsed = datetime.fromisoformat(value)
         except ValueError as error:
+            logger.warning(
+                "YandexGPT вернул невалидный due_to: %r",
+                value,
+                exc_info=error,
+            )
             raise ParserError(
                 ParserErrorCode.PARSER_FAILED,
                 "YandexGPT returned an invalid due_to value.",
@@ -499,6 +561,7 @@ class YandexGPTTaskParser(_YandexGPTParserBase):
             self._build_system_prompt(current),
             text,
         )
+        logger.info("YandexGPT raw task response: %s", model_response)
         payload = self._decode_and_validate(model_response)
         title = payload["title"].strip()
 
@@ -522,7 +585,7 @@ class YandexGPTTaskParser(_YandexGPTParserBase):
             )
 
         try:
-            return ParsedTaskInput(
+            parsed_task = ParsedTaskInput(
                 title=title,
                 description=description,
                 due_to=due_to,
@@ -531,10 +594,25 @@ class YandexGPTTaskParser(_YandexGPTParserBase):
                 raw_text=text,
             )
         except ValueError as error:
+            logger.warning(
+                "YandexGPT вернул несогласованные поля задачи",
+                exc_info=error,
+            )
             raise ParserError(
                 ParserErrorCode.PARSER_FAILED,
                 "YandexGPT returned inconsistent task fields.",
             ) from error
+
+        logger.info(
+            "YandexGPT task: title=%r | description=%r | due_to=%s | "
+            "repeat_type=%s | repeat_interval=%s",
+            parsed_task.title,
+            parsed_task.description,
+            parsed_task.due_to,
+            parsed_task.repeat_type,
+            parsed_task.repeat_interval,
+        )
+        return parsed_task
 
     def _build_system_prompt(self, now: datetime) -> str:
         schema = json.dumps(YANDEX_GENERATION_JSON_SCHEMA,
@@ -602,6 +680,11 @@ JSON Schema:
         try:
             payload = json.loads(model_response)
         except (TypeError, json.JSONDecodeError) as error:
+            logger.error(
+                "YandexGPT вернул невалидный JSON задачи: %s",
+                model_response[:500],
+                exc_info=error,
+            )
             raise ParserError(
                 ParserErrorCode.PARSER_FAILED,
                 "YandexGPT returned invalid JSON.",
@@ -762,6 +845,11 @@ JSON Schema:
         try:
             payload = json.loads(model_response)
         except (TypeError, json.JSONDecodeError) as error:
+            logger.error(
+                "YandexGPT вернул невалидный JSON даты: %s",
+                model_response[:500],
+                exc_info=error,
+            )
             raise ParserError(
                 ParserErrorCode.PARSER_FAILED,
                 "YandexGPT returned invalid date JSON.",
@@ -790,6 +878,7 @@ YandexDateParser = YandexGPTDateParser
 def get_parser(backend: str | None = None) -> TaskParser:
     selected_backend = (backend or getattr(settings, "PARSER_BACKEND",
                                            "mock")).strip().lower()
+    logger.info("Выбран parser backend: %s", selected_backend)
 
     if selected_backend == "mock":
         return MockTaskParser()

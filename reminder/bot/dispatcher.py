@@ -9,8 +9,11 @@ from aiogram.types import Message
 from config.settings import TELEGRAM_BOT_TOKEN
 from errors import ErrorCode
 from reminder.bot.handlers.start import handle_start
+from reminder.bot.handlers.voice import handle_voice as handle_voice_message
 from reminder.bot.telegram_files import TelegramFileDownloader
+from reminder.services.stt import YandexSpeechKitSTTService
 from reminder.services.users import UserService
+from reminder.services.voice_tasks import VoiceTaskCreationService
 
 from .sender import TelegramSender
 
@@ -26,19 +29,33 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN)
 sender = TelegramSender(bot)
 downloader = TelegramFileDownloader(bot)
 user_service = UserService()
+voice_task_service = None
 
 
-#Функция для тестов
 def set_dependencies(mock_sender=None,
                      mock_downloader=None,
-                     mock_user_service=None):
-    global sender, downloader, user_service
+                     mock_user_service=None,
+                     mock_voice_task_service=None):
+    global sender, downloader, user_service, voice_task_service
     if mock_sender is not None:
         sender = mock_sender
     if mock_downloader is not None:
         downloader = mock_downloader
     if mock_user_service is not None:
         user_service = mock_user_service
+    if mock_voice_task_service is not None:
+        voice_task_service = mock_voice_task_service
+
+
+def get_voice_task_service():
+    global voice_task_service
+    if voice_task_service is None:
+        logger.info("Инициализация VoiceTaskCreationService")
+        voice_task_service = VoiceTaskCreationService(
+            downloader=downloader,
+            stt=YandexSpeechKitSTTService(),
+        )
+    return voice_task_service
 
 
 @dp.message(Command("start"))
@@ -64,78 +81,31 @@ async def echo_message(message: Message):
 
 @dp.message(lambda message: message.content_type == ContentType.VOICE)
 async def handle_voice(message: Message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    message_id = message.message_id
-    temp_path = None
-
-    await sender.send_processing(chat_id)
-
-    logger.info(f"Голосовое сообщение | "
-                f"user_id={user_id} | "
-                f"chat_id={chat_id} | "
-                f"msg_id={message_id}")
-
-    voice = message.voice
-    error_code = downloader.validate_voice(voice)
-
-    if error_code != ErrorCode.OK:
-        await sender.send_error(chat_id, error_code)
-        logger.info(f"Ошибка скачивания | "
-                    f"Код ошибки: {error_code} |"
-                    f"user_id={user_id} | "
-                    f"chat_id={chat_id} | "
-                    f"msg_id={message_id}")
-        return None
-
-    file_id = voice.file_id
     try:
-        logger.info(f"Начало скачивания | "
-                    f"user_id={user_id} | "
-                    f"chat_id={chat_id} | "
-                    f"file_id={voice.file_id}")
-        temp_path, error_code = await downloader.download_voice(file_id)
-        if error_code != ErrorCode.OK:
-            await sender.send_error(chat_id, error_code)
-            logger.info(f"Ошибка скачивания |"
-                        f"user_id={user_id} | "
-                        f"chat_id={chat_id} | "
-                        f"error_code={error_code}")
-            return None
-
-        logger.info(f"Голосовое скачано | "
-                    f"user_id={user_id} | "
-                    f"chat_id={chat_id} | "
-                    f"path={temp_path} | "
-                    f"size={voice.file_size} байт |"
-                    f"duration={voice.duration} сек")
-    except Exception as e:
-        logger.error(
-            f"Ошибка скачивания | "
-            f"user_id={user_id} | "
-            f"chat_id={chat_id} | "
-            f"error={str(e)}",
-            exc_info=True)
-        await sender.send_error(chat_id, ErrorCode.GENERIC)
-        return None
-
-    finally:
-        if temp_path:
-            downloader.delete_voice(temp_path)
-            logger.info(f"Голосовое удалено | "
-                        f"user_id={user_id} | "
-                        f"chat_id={chat_id} | "
-                        f"path={temp_path} | "
-                        f"file_id={file_id}")
+        await handle_voice_message(message, user_service, sender,
+                                   get_voice_task_service())
+    except Exception:
+        logger.exception(
+            "Необработанная ошибка voice dispatcher | chat_id=%s",
+            message.chat.id,
+        )
+        await sender.send_error(message.chat.id, ErrorCode.GENERIC)
 
 
 async def start_bot():
-    print("Бот запущен")
+    try:
+        get_voice_task_service()
+    except Exception:
+        logger.exception("Не удалось инициализировать voice pipeline")
+        raise
+
+    logger.info("Бот запущен")
 
     try:
         await dp.start_polling(bot)
-    except Exception as e:
-        print(f"Ошибка при работе бота: {e}")
+    except Exception:
+        logger.exception("Ошибка при работе бота")
+        raise
 
 
 if __name__ == "__main__":

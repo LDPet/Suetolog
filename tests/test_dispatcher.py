@@ -2,9 +2,12 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from errors import ErrorCode
+from reminder.bot import dispatcher
 from reminder.bot.dispatcher import (echo_message, handle_voice,
-                                     set_dependencies, start_command)
+                                     set_dependencies, start_bot,
+                                     start_command)
+from reminder.services.dto import VoiceTaskResult
+from reminder.services.stt import STTConfigurationError
 
 
 @pytest.fixture
@@ -27,35 +30,79 @@ def mock_sender():
     sender.send_welcome = AsyncMock()
     sender.send_text = AsyncMock()
     sender.send_processing = AsyncMock()
+    sender.send_task_created = AsyncMock()
     sender.send_error = AsyncMock()
     return sender
 
 
 @pytest.fixture
-def mock_downloader():
-    downloader = Mock()
-    downloader.validate_voice = Mock(return_value=ErrorCode.OK)
-    downloader.download_voice = AsyncMock(return_value=("/tmp/test.ogg",
-                                                        ErrorCode.OK))
-    downloader.delete_voice = Mock()
-    return downloader
+def mock_user_service():
+    service = Mock()
+    service.get_or_create_user = Mock(return_value=Mock())
+    return service
 
 
 @pytest.fixture
-def mock_user_service():
+def mock_voice_task_service():
     service = Mock()
-    service.get_or_create_user = Mock()
+    service.create_from_voice = AsyncMock(
+        return_value=VoiceTaskResult.ok(Mock()))
     return service
+
+
+def test_voice_handler_is_registered():
+    assert any(handler.callback is handle_voice
+               for handler in dispatcher.dp.message.handlers)
+
+
+def test_voice_service_uses_dispatcher_dependencies(monkeypatch):
+    stt = Mock()
+    service = Mock()
+    stt_factory = Mock(return_value=stt)
+    service_factory = Mock(return_value=service)
+    monkeypatch.setattr(dispatcher, "voice_task_service", None)
+    monkeypatch.setattr(dispatcher, "YandexSpeechKitSTTService", stt_factory)
+    monkeypatch.setattr(dispatcher, "VoiceTaskCreationService",
+                        service_factory)
+
+    result = dispatcher.get_voice_task_service()
+
+    assert result is service
+    stt_factory.assert_called_once_with()
+    service_factory.assert_called_once_with(
+        downloader=dispatcher.downloader,
+        stt=stt,
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_bot_validates_voice_service_before_polling(monkeypatch):
+    configuration_error = STTConfigurationError("missing credentials")
+    service_factory = Mock(side_effect=configuration_error)
+    polling = AsyncMock()
+    monkeypatch.setattr(dispatcher, "get_voice_task_service", service_factory)
+    monkeypatch.setattr(dispatcher.dp, "start_polling", polling)
+
+    with pytest.raises(STTConfigurationError) as exc_info:
+        await start_bot()
+
+    assert exc_info.value is configuration_error
+    service_factory.assert_called_once_with()
+    polling.assert_not_awaited()
 
 
 class TestHandlers:
 
     @pytest.fixture(autouse=True)
-    def setup(self, mock_sender, mock_downloader, mock_user_service):
-        set_dependencies(mock_sender, mock_downloader, mock_user_service)
+    def setup(self, mock_sender, mock_user_service, mock_voice_task_service):
+        set_dependencies(
+            mock_sender=mock_sender,
+            mock_user_service=mock_user_service,
+            mock_voice_task_service=mock_voice_task_service,
+        )
         self.sender = mock_sender
-        self.downloader = mock_downloader
         self.user_service = mock_user_service
+        self.voice_task_service = mock_voice_task_service
 
     @pytest.mark.asyncio
     async def test_start_command(self, mock_message):
@@ -78,36 +125,15 @@ class TestHandlers:
     async def test_handle_voice_success(self, mock_message):
         await handle_voice(mock_message)
 
-        self.downloader.validate_voice.assert_called_once_with(
-            mock_message.voice)
-        self.downloader.download_voice.assert_called_once_with(
-            mock_message.voice.file_id)
-        self.downloader.delete_voice.assert_called_once()
+        user = self.user_service.get_or_create_user.return_value
+        task = self.voice_task_service.create_from_voice.return_value.task
+        self.user_service.get_or_create_user.assert_called_once_with(
+            chat_id=mock_message.chat.id,
+            telegram_user_id=mock_message.from_user.id,
+        )
         self.sender.send_processing.assert_called_once_with(
             mock_message.chat.id)
-        self.sender.send_processing.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_handle_voice_too_long(self, mock_message):
-        self.downloader.validate_voice = Mock(
-            return_value=ErrorCode.VOICE_TOO_LONG)
-        set_dependencies(self.sender, self.downloader)
-
-        await handle_voice(mock_message)
-
-        self.downloader.validate_voice.assert_called_once()
-        self.downloader.download_voice.assert_not_called()
-        self.sender.send_error.assert_called_once_with(
-            mock_message.chat.id, ErrorCode.VOICE_TOO_LONG)
-
-    @pytest.mark.asyncio
-    async def test_handle_voice_download_error(self, mock_message):
-        self.downloader.download_voice = AsyncMock(
-            side_effect=Exception("Download failed"))
-        set_dependencies(self.sender, self.downloader)
-
-        await handle_voice(mock_message)
-
-        self.downloader.download_voice.assert_called_once()
-        self.sender.send_error.assert_called_once_with(mock_message.chat.id,
-                                                       ErrorCode.GENERIC)
+        self.voice_task_service.create_from_voice.assert_awaited_once_with(
+            user, mock_message.voice)
+        self.sender.send_task_created.assert_awaited_once_with(
+            mock_message.chat.id, task)

@@ -108,6 +108,7 @@ def mock_sender():
     sender.send_welcome = AsyncMock()
     sender.send_text = AsyncMock()
     sender.send_processing = AsyncMock()
+    sender.send_task_created = AsyncMock()
     sender.send_error = AsyncMock()
     return sender
 
