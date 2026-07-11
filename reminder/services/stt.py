@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import socket
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -33,6 +34,7 @@ class STTConfigurationError(RuntimeError):
 class YandexSpeechKitSTTService:
     ENDPOINT = "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize"
     PROVIDER = "yandex_speechkit"
+    RETRY_DELAY_SEC = 0.5
 
     def __init__(
         self,
@@ -121,14 +123,17 @@ class YandexSpeechKitSTTService:
             except urllib.error.HTTPError as error:
                 error.close()
                 if 500 <= error.code < 600 and attempt == 0:
+                    time.sleep(self.RETRY_DELAY_SEC)
                     continue
                 raise self._failed_error() from error
             except (TimeoutError, socket.timeout) as error:
                 if attempt == 0:
+                    time.sleep(self.RETRY_DELAY_SEC)
                     continue
                 raise self._failed_error() from error
             except urllib.error.URLError as error:
                 if self._is_timeout(error) and attempt == 0:
+                    time.sleep(self.RETRY_DELAY_SEC)
                     continue
                 raise self._failed_error() from error
 
