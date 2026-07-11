@@ -112,6 +112,7 @@ def test_stt_rejects_empty_transcript(monkeypatch, audio_path, service,
 )
 def test_stt_retries_timeout_and_5xx(monkeypatch, audio_path, service,
                                      first_error):
+    delays = []
     outcomes = [
         first_error,
         FakeHTTPResponse(speechkit_response("купить хлеб")),
@@ -124,9 +125,11 @@ def test_stt_retries_timeout_and_5xx(monkeypatch, audio_path, service,
         return outcome
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("reminder.services.stt.time.sleep", delays.append)
 
     assert service.transcribe(audio_path).text == "купить хлеб"
     assert outcomes == []
+    assert delays == [YandexSpeechKitSTTService.RETRY_DELAY_SEC]
 
 
 @pytest.mark.parametrize("status", [401, 403])
@@ -156,6 +159,7 @@ def test_stt_does_not_retry_auth_errors(monkeypatch, audio_path, service,
 
 def test_stt_stops_after_one_5xx_retry(monkeypatch, audio_path, service):
     calls = 0
+    delays = []
 
     def fake_urlopen(request, timeout):
         nonlocal calls
@@ -169,12 +173,14 @@ def test_stt_stops_after_one_5xx_retry(monkeypatch, audio_path, service):
         )
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("reminder.services.stt.time.sleep", delays.append)
 
     with pytest.raises(STTError) as exc_info:
         service.transcribe(audio_path)
 
     assert exc_info.value.code == STTErrorCode.STT_FAILED
     assert calls == 2
+    assert delays == [YandexSpeechKitSTTService.RETRY_DELAY_SEC]
 
 
 def test_stt_rejects_invalid_response(monkeypatch, audio_path, service):
@@ -213,20 +219,14 @@ def test_stt_uses_django_settings(settings):
 
 def test_stt_does_not_log_key_or_transcript(monkeypatch, audio_path, service,
                                             caplog):
+    transcript = "завтра в 15 позвонить врачу"
 
     def fake_urlopen(request, timeout):
-        raise urllib.error.HTTPError(
-            request.full_url,
-            401,
-            "Authorization failed",
-            {},
-            BytesIO(),
-        )
+        return FakeHTTPResponse(speechkit_response(transcript))
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    with pytest.raises(STTError):
-        service.transcribe(audio_path)
+    assert service.transcribe(audio_path).text == transcript
 
     assert "secret-key" not in caplog.text
-    assert "завтра в 15 позвонить врачу" not in caplog.text
+    assert transcript not in caplog.text
