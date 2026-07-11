@@ -8,7 +8,9 @@ from aiogram.types import Message
 
 from config.settings import TELEGRAM_BOT_TOKEN
 from errors import ErrorCode
+from reminder.bot.handlers.start import handle_start
 from reminder.bot.telegram_files import TelegramFileDownloader
+from reminder.services.users import UserService
 
 from .sender import TelegramSender
 
@@ -23,27 +25,25 @@ dp = Dispatcher()
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 sender = TelegramSender(bot)
 downloader = TelegramFileDownloader(bot)
+user_service = UserService()
 
 
 #Функция для тестов
-def set_dependencies(mock_sender=None, mock_downloader=None):
-    global sender, downloader
+def set_dependencies(mock_sender=None,
+                     mock_downloader=None,
+                     mock_user_service=None):
+    global sender, downloader, user_service
     if mock_sender is not None:
         sender = mock_sender
     if mock_downloader is not None:
         downloader = mock_downloader
+    if mock_user_service is not None:
+        user_service = mock_user_service
 
 
 @dp.message(Command("start"))
 async def start_command(message: Message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-
-    logger.info(f"Команда /start | "
-                f"user_id={user_id} | "
-                f"chat_id={chat_id}")
-
-    await sender.send_welcome(chat_id)
+    await handle_start(message, user_service, sender)
 
 
 @dp.message(lambda message: message.content_type == ContentType.TEXT)
