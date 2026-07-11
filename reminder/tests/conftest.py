@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 from django.utils import timezone
 
-from reminder.models import Reminder, Task, User
+from reminder.models import Reminder, Task, TaskEvent, User
 
 
 @pytest.fixture
@@ -29,4 +29,13 @@ def reminder(db, task) -> Reminder:
         task=task,
         reminder_time=future_time,
         message_id=12345,
+    )
+
+
+@pytest.fixture
+def task_event(db, task) -> TaskEvent:
+    return TaskEvent.objects.create(
+        task=task,
+        event_type=TaskEvent.EventType.CREATED,
+        message_id=123456,
     )

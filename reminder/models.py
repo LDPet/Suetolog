@@ -77,3 +77,42 @@ class Reminder(models.Model):
 
     def __str__(self):
         return f"Reminder(task={self.task_id}, at={self.reminder_time}, reaction={self.reaction})"
+
+
+class TaskEvent(models.Model):
+
+    class EventType(models.TextChoices):
+        CREATED = "created", "Создана"
+        REMINDER_SENT = "reminder_sent", "Напоминание отправлено"
+        UNDATED_CARD_SENT = "undated_card_sent", "Карточка без даты"
+        EVENING_QUESTION_SENT = "evening_question_sent", "Вечерний вопрос"
+        COMPLETED = "completed", "Выполнена"
+        CANCELLED = "cancelled", "Отменена"
+        RESCHEDULED = "rescheduled", "Перенесена"
+        DATE_SET = "date_set", "Дата установлена"
+        DELETED = "deleted", "Удалена"
+        DIGEST_SENT = "digest_sent", "Дайджест отправлен"
+
+    task = models.ForeignKey(
+        Task,
+        on_delete=models.CASCADE,
+        related_name="events",
+    )
+    event_type = models.CharField(
+        max_length=30,
+        choices=EventType.choices,
+    )
+    message_id = models.BigIntegerField(
+        null=True,
+        blank=True,
+        unique=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["task", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"TaskEvent(task={self.task_id}, event_type={self.event_type}, message_id={self.message_id})"
