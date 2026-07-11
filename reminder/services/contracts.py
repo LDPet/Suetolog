@@ -7,7 +7,27 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
+from errors import ErrorCode
 from reminder.services.dto import ParsedTaskInput, STTResult
+
+
+class VoiceInput(Protocol):
+    file_id: str
+    duration: int
+    file_size: int
+
+
+class VoiceFileDownloader(Protocol):
+
+    def validate_voice(self, voice: VoiceInput) -> ErrorCode:
+        ...
+
+    async def download_voice(self,
+                             file_id: str) -> tuple[Path | None, ErrorCode]:
+        ...
+
+    def delete_voice(self, file_path: Path) -> None:
+        ...
 
 
 class STTService(Protocol):
