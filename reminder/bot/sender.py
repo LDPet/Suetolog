@@ -1,7 +1,10 @@
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from asgiref.sync import sync_to_async
 
 from errors import error_messages
+from reminder.models import TaskEvent
+from reminder.repositories.task_event import TaskEventRepository
 
 
 class TelegramSender:
@@ -56,6 +59,10 @@ class TelegramSender:
             ]])
             message_id = await self.send_text_with_keyboard(
                 chat_id, text, keyboard)
+            await sync_to_async(
+                TaskEventRepository.create, thread_sensitive=True)(
+                    task=task,
+                    event_type=TaskEvent.EventType.UNDATED_CARD_SENT)
 
         return message_id
 

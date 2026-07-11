@@ -1,8 +1,7 @@
-from types import SimpleNamespace
-
 import pytest
 
 from errors import ErrorCode, error_messages
+from reminder.models import Task
 
 
 class TestTelegramSender:
@@ -46,8 +45,12 @@ class TestTelegramSender:
 
     @pytest.mark.asyncio
     async def test_send_undated_list_uses_task_primary_key(
-            self, sender, mock_bot):
-        task = SimpleNamespace(pk=42, title="Купить молоко")
+            self, sender, mock_bot, mocker):
+        task = Task(pk=42, title="Купить молоко")
+
+        mock_create = mocker.patch(
+            'reminder.repositories.task_event.TaskEventRepository.create')
+        mock_create.return_value = None
 
         await sender.send_undated_list(123456, [task])
 

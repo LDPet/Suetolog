@@ -47,10 +47,12 @@ class TaskService:
             ),
         )
 
-    def list_undated(self, user: User) -> list[Task]:
+    @staticmethod
+    def list_undated(user: User) -> list[Task]:
         return TaskRepository.list_undated(user)
 
-    def list_for_day(self, user: User, date: Date) -> list[Task]:
+    @staticmethod
+    def list_for_day(user: User, date: Date) -> list[Task]:
         return TaskRepository.list_for_day(user, date)
 
     @transaction.atomic

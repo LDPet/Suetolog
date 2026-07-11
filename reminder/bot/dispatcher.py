@@ -4,17 +4,21 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ContentType
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 
 from config.settings import TELEGRAM_BOT_TOKEN
 from errors import ErrorCode
+from reminder.bot.handlers.callbacks import (assign_date_callback,
+                                             delete_task_callback)
 from reminder.bot.handlers.start import handle_start
+from reminder.bot.handlers.undated import handle_undated
 from reminder.bot.handlers.voice import handle_voice as handle_voice_message
 from reminder.bot.telegram_files import TelegramFileDownloader
 from reminder.services.stt import YandexSpeechKitSTTService
 from reminder.services.users import UserService
 from reminder.services.voice_tasks import VoiceTaskCreationService
 
+from ..services.tasks import TaskService
 from .sender import TelegramSender
 
 logging.basicConfig(
@@ -29,6 +33,7 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN)
 sender = TelegramSender(bot)
 downloader = TelegramFileDownloader(bot)
 user_service = UserService()
+task_service = TaskService()
 voice_task_service = None
 
 
@@ -63,6 +68,11 @@ async def start_command(message: Message):
     await handle_start(message, user_service, sender)
 
 
+@dp.message(Command("undated"))
+async def undated_command(message: Message):
+    message_id = await handle_undated(message, user_service, sender)
+
+
 @dp.message(lambda message: message.content_type == ContentType.TEXT)
 async def echo_message(message: Message):
     user_id = message.from_user.id
@@ -75,6 +85,10 @@ async def echo_message(message: Message):
                 f"chat_id={chat_id} | "
                 f"msg_id={message_id} | "
                 f"text={text}...")
+
+    if text == "Без даты" or text == "без даты":
+        await handle_undated(message, user_service, sender)
+        return
 
     await sender.send_text(chat_id, f"{message.text}\n\n")
 
@@ -90,6 +104,16 @@ async def handle_voice(message: Message):
             message.chat.id,
         )
         await sender.send_error(message.chat.id, ErrorCode.GENERIC)
+
+
+@dp.callback_query(lambda c: c.data.startswith('delete:'))
+async def delete_callback(callback: CallbackQuery):
+    await delete_task_callback(callback, task_service, sender)
+
+
+@dp.callback_query(lambda c: c.data.startswith('assign_date:'))
+async def assign_callback(callback: CallbackQuery):
+    await assign_date_callback(callback, sender)
 
 
 async def start_bot():
