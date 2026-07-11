@@ -41,17 +41,30 @@ def mock_downloader():
     return downloader
 
 
+@pytest.fixture
+def mock_user_service():
+    service = Mock()
+    service.get_or_create_user = Mock()
+    return service
+
+
 class TestHandlers:
 
     @pytest.fixture(autouse=True)
-    def setup(self, mock_sender, mock_downloader):
-        set_dependencies(mock_sender, mock_downloader)
+    def setup(self, mock_sender, mock_downloader, mock_user_service):
+        set_dependencies(mock_sender, mock_downloader, mock_user_service)
         self.sender = mock_sender
         self.downloader = mock_downloader
+        self.user_service = mock_user_service
 
     @pytest.mark.asyncio
     async def test_start_command(self, mock_message):
         await start_command(mock_message)
+
+        self.user_service.get_or_create_user.assert_called_once_with(
+            chat_id=mock_message.chat.id,
+            telegram_user_id=mock_message.from_user.id,
+        )
         self.sender.send_welcome.assert_called_once_with(mock_message.chat.id)
 
     @pytest.mark.asyncio
