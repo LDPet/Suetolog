@@ -24,19 +24,14 @@ class ReminderService:
                 task__status=Task.Status.ACTIVE,
                 sent_time__isnull=True,
                 reminder_time__lte=now,
-            )
-            .select_related("task", "task__user")
-            .order_by("reminder_time")[:limit]
-        )
+            ).select_related("task",
+                             "task__user").order_by("reminder_time")[:limit])
 
     @transaction.atomic
     def mark_sent(self, reminder, message_id):
         reminder = (
-            Reminder.objects
-            .select_for_update()
-            .select_related("task")
-            .get(id=reminder.id)
-        )
+            Reminder.objects.select_for_update().select_related("task").get(
+                id=reminder.id))
 
         if reminder.sent_time is not None:
             return reminder
@@ -57,12 +52,7 @@ class ReminderService:
         return reminder
 
     def find_by_message(self, chat_id, message_id):
-        return (
-            Reminder.objects
-            .select_related("task", "task__user")
-            .filter(
-                task__user__chat_id=chat_id,
-                message_id=message_id,
-            )
-            .first()
-        )
+        return (Reminder.objects.select_related("task", "task__user").filter(
+            task__user__chat_id=chat_id,
+            message_id=message_id,
+        ).first())
