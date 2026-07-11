@@ -14,12 +14,14 @@ def create_task_with_reminder_and_event(
     title: str,
     description: str = "",
     due_to=None,
+    due_to_has_time: bool = False,
     repeat_type: str | None = None,
     repeat_interval: int | None = None,
     reminder_time=_REMINDER_FROM_DUE_TO,
 ) -> Task:
+    """Атомарно создать задачу, напоминание и событие создания."""
     if reminder_time is _REMINDER_FROM_DUE_TO:
-        reminder_time = due_to
+        reminder_time = due_to if due_to_has_time else None
 
     with transaction.atomic():
         task = TaskRepository.create(
@@ -27,6 +29,7 @@ def create_task_with_reminder_and_event(
             title=title,
             description=description,
             due_to=due_to,
+            due_to_has_time=due_to_has_time,
             repeat_type=repeat_type,
             repeat_interval=repeat_interval,
         )

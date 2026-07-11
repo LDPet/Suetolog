@@ -59,6 +59,7 @@ class TestAtomicBundle:
             title="Test bundle",
             description="Desc",
             due_to=due_to,
+            due_to_has_time=True,
         )
         assert task.pk is not None
         reminders = task.reminders.all()

@@ -67,6 +67,7 @@ def parser():
             second=0,
             microsecond=0,
         ),
+        due_to_has_time=True,
     ))
     return service
 
@@ -248,6 +249,7 @@ async def test_past_date_from_task_service_is_mapped_without_partial_task(
         title="Опоздавшая задача",
         raw_text="напомни вчера",
         due_to=timezone.now() - timedelta(days=1),
+        due_to_has_time=True,
     )
     service = build_service(downloader, stt, parser)
 

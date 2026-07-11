@@ -47,6 +47,7 @@ def task_response(**overrides):
         "title": "Купить корм для кота",
         "description": None,
         "due_to": None,
+        "due_to_has_time": False,
         "repeat_type": None,
         "repeat_interval": None,
     }
@@ -77,6 +78,7 @@ def api_response(text):
                 "title": "Купить корм для кота",
                 "description": None,
                 "due_to": None,
+                "due_to_has_time": False,
                 "repeat_type": None,
                 "repeat_interval": None,
             },
@@ -87,11 +89,13 @@ def api_response(text):
                 title="Отправить отчёт",
                 description="Добавить цифры продаж",
                 due_to="2026-07-04T18:00:00+03:00",
+                due_to_has_time=True,
             ),
             {
                 "title": "Отправить отчёт",
                 "description": "Добавить цифры продаж",
                 "due_to": datetime(2026, 7, 4, 18, 0, tzinfo=MSK),
+                "due_to_has_time": True,
                 "repeat_type": None,
                 "repeat_interval": None,
             },
@@ -100,13 +104,16 @@ def api_response(text):
             "Каждый понедельник в 9 проверить финансы",
             task_response(
                 title="Проверить финансы",
+                due_to="2026-07-06T09:00:00+03:00",
+                due_to_has_time=True,
                 repeat_type="weekly",
                 repeat_interval=1,
             ),
             {
                 "title": "Проверить финансы",
                 "description": None,
-                "due_to": None,
+                "due_to": datetime(2026, 7, 6, 9, 0, tzinfo=MSK),
+                "due_to_has_time": True,
                 "repeat_type": "weekly",
                 "repeat_interval": 1,
             },
@@ -122,6 +129,7 @@ def test_yandex_parser_parses_voice_pipeline_examples(transcript, response,
     assert parsed.title == expected["title"]
     assert parsed.description == expected["description"]
     assert parsed.due_to == expected["due_to"]
+    assert parsed.due_to_has_time == expected["due_to_has_time"]
     assert parsed.repeat_type == expected["repeat_type"]
     assert parsed.repeat_interval == expected["repeat_interval"]
     assert parsed.raw_text == transcript
@@ -141,26 +149,47 @@ def test_yandex_parser_prompt_contains_now_schema_and_examples():
     assert "В пятницу позвонить врачу" in system_prompt
     assert "Одна дата («в пятницу», «во вторник»)" in system_prompt
     assert "Служебные слова «напомни»" in system_prompt
+    assert 'верни title="", due_to_has_time=false' in system_prompt
     assert "При словах «и потом», «затем», «после этого»" in system_prompt
     assert "ближайшее строго будущее первое выполнение" in system_prompt
     assert "По пятницам в 9 проверять финансы" in system_prompt
     assert "Сделать то же что вчера" in system_prompt
     assert '"due_to":"2026-07-10T00:00:00+03:00"' in system_prompt
+    assert '"due_to":"2026-07-06T09:00:00+03:00"' in system_prompt
     assert '"due_to":"2026-07-10T09:00:00+03:00"' in system_prompt
     assert '"due_to":"2026-07-05T15:30:00+03:00"' in system_prompt
     assert '"due_to":"2026-07-03T00:00:00+03:00"' in system_prompt
     assert user_text == "Купить корм"
 
 
-def test_yandex_parser_allows_due_date_equal_to_now():
-    response = task_response(due_to=NOW.isoformat())
+def test_yandex_parser_rejects_exact_datetime_equal_to_now():
+    response = task_response(
+        due_to=NOW.isoformat(),
+        due_to_has_time=True,
+    )
+
+    with pytest.raises(ParserError) as exc_info:
+        YandexGPTTaskParser(client=StubClient(response)).parse_task(
+            "Купить корм сейчас",
+            now=NOW,
+        )
+
+    assert exc_info.value.code == ParserErrorCode.DATE_IN_PAST
+
+
+def test_yandex_parser_allows_today_without_time():
+    response = task_response(
+        due_to="2026-07-04T00:00:00+03:00",
+        due_to_has_time=False,
+    )
 
     parsed = YandexGPTTaskParser(client=StubClient(response)).parse_task(
-        "Купить корм сейчас",
+        "Сегодня купить корм",
         now=NOW,
     )
 
-    assert parsed.due_to == NOW
+    assert parsed.due_to == datetime(2026, 7, 4, 0, 0, tzinfo=MSK)
+    assert parsed.due_to_has_time is False
 
 
 def test_yandex_parser_reports_empty_title_after_schema_validation():
@@ -178,6 +207,7 @@ def test_yandex_parser_removes_description_that_duplicates_title():
         title="Позвонить врачу",
         description="Позвонить врачу",
         due_to="2026-07-04T18:00:00+03:00",
+        due_to_has_time=True,
     )
 
     parsed = YandexGPTTaskParser(client=StubClient(response)).parse_task(
@@ -195,7 +225,9 @@ def test_yandex_parser_removes_description_that_duplicates_title():
         "```json\n" + task_response() + "\n```",
         task_response(title="   "),
         task_response(unexpected="field"),
-        task_response(due_to="2026-07-05T12:00:00"),
+        task_response(due_to="2026-07-05T12:00:00", due_to_has_time=True),
+        task_response(due_to="not-a-date", due_to_has_time=False),
+        task_response(due_to_has_time=True),
         task_response(repeat_type="weekly", repeat_interval=None),
     ],
 )
@@ -213,6 +245,7 @@ def test_yandex_parser_rejects_past_date():
     response = task_response(
         title="Сделать то же что вчера",
         due_to="2026-07-03T10:00:00+03:00",
+        due_to_has_time=True,
     )
 
     with pytest.raises(ParserError) as exc_info:

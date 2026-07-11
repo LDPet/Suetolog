@@ -43,20 +43,38 @@ class VoiceTaskResult:
 
 
 @dataclass(frozen=True)
+class ParsedDateResult:
+    """Распознанный срок и признак явно указанного пользователем времени."""
+
+    due_to: datetime
+    due_to_has_time: bool
+
+
+@dataclass(frozen=True)
 class ParsedTaskInput:
+    """Нормализованные поля задачи, полученные от парсера."""
+
     title: str
     raw_text: str
     due_to: datetime | None = None
+    due_to_has_time: bool = False
     description: str | None = None
     repeat_type: str | None = None
     repeat_interval: int | None = None
 
     def __post_init__(self):
+        """Проверить согласованность полей распознанной задачи."""
         if not self.title.strip():
             raise ValueError("Название задачи не может быть пустым")
 
         if not self.raw_text.strip():
             raise ValueError('Исходный текст задачи не может быть пустым')
+
+        if not isinstance(self.due_to_has_time, bool):
+            raise ValueError("Признак точного времени должен быть boolean")
+
+        if self.due_to is None and self.due_to_has_time:
+            raise ValueError("Точное время задано без срока задачи")
 
         if self.repeat_type is None and self.repeat_interval is not None:
             raise ValueError("Интервал повтора задан без типа повтора")

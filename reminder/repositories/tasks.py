@@ -10,13 +10,16 @@ class TaskRepository:
                title: str,
                description: str = "",
                due_to=None,
+               due_to_has_time: bool = False,
                repeat_type: str | None = None,
                repeat_interval: int | None = None) -> Task:
+        """Создать задачу с сохранением признака точного времени срока."""
         return Task.objects.create(
             user=user,
             title=title,
             description=description,
             due_to=due_to,
+            due_to_has_time=due_to_has_time,
             repeat_type=repeat_type,
             repeat_interval=repeat_interval,
         )
@@ -60,9 +63,11 @@ class TaskRepository:
             ).order_by("due_to", "created_at"))
 
     @staticmethod
-    def update_due_to(task: Task, due_to) -> Task:
+    def update_due_to(task: Task, due_to, due_to_has_time: bool) -> Task:
+        """Одновременно обновить срок задачи и признак точного времени."""
         task.due_to = due_to
-        task.save(update_fields=["due_to"])
+        task.due_to_has_time = due_to_has_time
+        task.save(update_fields=["due_to", "due_to_has_time"])
         return task
 
     @staticmethod

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Protocol
 
 from errors import ErrorCode
-from reminder.services.dto import ParsedTaskInput, STTResult
+from reminder.services.dto import ParsedDateResult, ParsedTaskInput, STTResult
 
 
 class VoiceInput(Protocol):
@@ -46,5 +46,8 @@ class TaskParser(Protocol):
 
 class DateParser(Protocol):
 
-    def parse_date(self, text: str, now: datetime | None = None) -> datetime:
+    def parse_date(self,
+                   text: str,
+                   now: datetime | None = None) -> ParsedDateResult:
+        """Распознать дату вместе с признаком явно указанного времени."""
         ...

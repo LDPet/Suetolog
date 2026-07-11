@@ -29,17 +29,22 @@ class TaskDateInPastError(ValueError):
 class TaskService:
 
     def create_from_parsed(self, user: User, parsed: ParsedTaskInput) -> Task:
+        """Создать задачу и напоминание из проверенного результата парсера."""
         if parsed.due_to is not None:
-            self._validate_due_to(parsed.due_to)
+            self._validate_due_to(parsed.due_to, parsed.due_to_has_time)
 
         return create_task_with_reminder_and_event(
             user=user,
             title=parsed.title,
             description=parsed.description or "",
             due_to=parsed.due_to,
+            due_to_has_time=parsed.due_to_has_time,
             repeat_type=parsed.repeat_type,
             repeat_interval=parsed.repeat_interval,
-            reminder_time=self._get_reminder_time(parsed.due_to),
+            reminder_time=self._get_reminder_time(
+                parsed.due_to,
+                parsed.due_to_has_time,
+            ),
         )
 
     def list_undated(self, user: User) -> list[Task]:
@@ -49,23 +54,34 @@ class TaskService:
         return TaskRepository.list_for_day(user, date)
 
     @transaction.atomic
-    def set_due_date(self, user: User, task_id: int, due_to: datetime) -> Task:
-        self._validate_due_to(due_to)
+    def set_due_date(self,
+                     user: User,
+                     task_id: int,
+                     due_to: datetime,
+                     due_to_has_time: bool = True) -> Task:
+        """Назначить первый срок и сохранить признак точного времени."""
+        self._validate_due_to(due_to, due_to_has_time)
         task = self._get_owned_task_for_update(user, task_id)
         self._require_active(task)
         if task.due_to is not None:
             raise TaskStateError(
                 "Task already has a date; use reschedule instead.")
-        return self._change_due_to(task, due_to, TaskEvent.EventType.DATE_SET)
+        return self._change_due_to(task, due_to, due_to_has_time,
+                                   TaskEvent.EventType.DATE_SET)
 
     @transaction.atomic
-    def reschedule(self, user: User, task_id: int, due_to: datetime) -> Task:
-        self._validate_due_to(due_to)
+    def reschedule(self,
+                   user: User,
+                   task_id: int,
+                   due_to: datetime,
+                   due_to_has_time: bool = True) -> Task:
+        """Изменить срок задачи и пересоздать ожидающее напоминание."""
+        self._validate_due_to(due_to, due_to_has_time)
         task = self._get_owned_task_for_update(user, task_id)
         self._require_active(task)
         if task.due_to is None:
             raise TaskStateError("Task has no date; use set_due_date instead.")
-        return self._change_due_to(task, due_to,
+        return self._change_due_to(task, due_to, due_to_has_time,
                                    TaskEvent.EventType.RESCHEDULED)
 
     @transaction.atomic
@@ -135,11 +151,13 @@ class TaskService:
             raise TaskStateError("Only active tasks can be changed.")
 
     @staticmethod
-    def _change_due_to(task: Task, due_to: datetime, event_type: str) -> Task:
-        TaskRepository.update_due_to(task, due_to)
+    def _change_due_to(task: Task, due_to: datetime, due_to_has_time: bool,
+                       event_type: str) -> Task:
+        """Сохранить новый срок, заменить напоминание и создать событие."""
+        TaskRepository.update_due_to(task, due_to, due_to_has_time)
         ReminderRepository.replace_pending_for_task(
             task,
-            TaskService._get_reminder_time(due_to),
+            TaskService._get_reminder_time(due_to, due_to_has_time),
         )
         TaskEventRepository.create(task=task, event_type=event_type)
         return task
@@ -152,19 +170,30 @@ class TaskService:
         return task
 
     @staticmethod
-    def _validate_due_to(due_to: datetime) -> None:
+    def _validate_due_to(due_to: datetime, due_to_has_time: bool) -> None:
+        """Проверить календарную дату и точное время по разным правилам."""
         if not isinstance(due_to, datetime):
             raise TypeError("due_to must be a datetime.")
+        if not isinstance(due_to_has_time, bool):
+            raise TypeError("due_to_has_time must be a bool.")
         if timezone.is_naive(due_to):
             raise ValueError("due_to must be timezone-aware.")
-        if due_to < timezone.now():
+
+        now = timezone.now()
+        if due_to_has_time:
+            is_past = due_to <= now
+        else:
+            is_past = timezone.localdate(due_to) < timezone.localdate(now)
+
+        if is_past:
             raise TaskDateInPastError("Task date is in the past.")
 
     @staticmethod
-    def _get_reminder_time(due_to: datetime | None) -> datetime | None:
-        if due_to is None:
+    def _get_reminder_time(due_to: datetime | None,
+                           due_to_has_time: bool) -> datetime | None:
+        """Вернуть время напоминания только для точного будущего срока."""
+        if due_to is None or not due_to_has_time:
             return None
-        if not any(
-            (due_to.hour, due_to.minute, due_to.second, due_to.microsecond)):
+        if due_to <= timezone.now():
             return None
         return due_to
