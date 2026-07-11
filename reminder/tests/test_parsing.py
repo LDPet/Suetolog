@@ -26,6 +26,7 @@ def test_mock_parser_parses_tomorrow_with_numeric_time():
 
     assert parsed.title == "позвонить врачу"
     assert parsed.due_to == datetime(2026, 7, 11, 15, 0)
+    assert parsed.due_to_has_time is True
 
 
 def test_mock_parser_parses_tomorrow_with_word_time():
@@ -36,26 +37,39 @@ def test_mock_parser_parses_tomorrow_with_word_time():
 
     assert parsed.title == "позвонить маме"
     assert parsed.due_to == datetime(2026, 7, 11, 3, 0)
+    assert parsed.due_to_has_time is True
 
 
-def test_mock_parser_parses_weekday_with_default_time():
+def test_mock_parser_parses_weekday_without_exact_time():
     parsed = MockTaskParser().parse_task(
         "напомни в понедельник проверить почту",
         now=datetime(2026, 7, 10, 12, 0),
     )
 
     assert parsed.title == "проверить почту"
-    assert parsed.due_to == datetime(2026, 7, 13, 9, 0)
+    assert parsed.due_to == datetime(2026, 7, 13, 0, 0)
+    assert parsed.due_to_has_time is False
 
 
-def test_mock_parser_keeps_tomorrow_without_time_undated():
+def test_mock_parser_keeps_tomorrow_as_date_without_time():
     parsed = MockTaskParser().parse_task(
         "завтра купить хлеб",
         now=datetime(2026, 7, 10, 12, 0),
     )
 
     assert parsed.title == "купить хлеб"
-    assert parsed.due_to is None
+    assert parsed.due_to == datetime(2026, 7, 11, 0, 0)
+    assert parsed.due_to_has_time is False
+
+
+def test_mock_parser_allows_today_without_time():
+    parsed = MockTaskParser().parse_task(
+        "сегодня купить хлеб",
+        now=datetime(2026, 7, 10, 12, 0),
+    )
+
+    assert parsed.due_to == datetime(2026, 7, 10, 0, 0)
+    assert parsed.due_to_has_time is False
 
 
 @pytest.mark.parametrize("text", ["", "   ", "э-э-э...", "молоко"])

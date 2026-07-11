@@ -9,6 +9,7 @@ Task
 - title
 - description
 - due_to
+- due_to_has_time
 - repeat_type
 - repeat_interval
 - status

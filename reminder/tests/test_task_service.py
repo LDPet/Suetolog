@@ -30,6 +30,7 @@ def parsed_task(**overrides) -> ParsedTaskInput:
         "raw_text": "завтра в 15 позвонить врачу",
         "description": None,
         "due_to": None,
+        "due_to_has_time": False,
         "repeat_type": None,
         "repeat_interval": None,
     }
@@ -51,8 +52,10 @@ def test_create_with_future_due_to_creates_task_reminder_and_event(
     due_to = future_at()
 
     task = service.create_from_parsed(
-        user, parsed_task(
+        user,
+        parsed_task(
             due_to=due_to,
+            due_to_has_time=True,
             description="Регистратура",
         ))
 
@@ -60,6 +63,7 @@ def test_create_with_future_due_to_creates_task_reminder_and_event(
     assert task.title == "Позвонить врачу"
     assert task.description == "Регистратура"
     assert task.due_to == due_to
+    assert task.due_to_has_time is True
     assert task.status == Task.Status.ACTIVE
     assert task.reminders.get().reminder_time == due_to
     assert task.events.get().event_type == TaskEvent.EventType.CREATED
@@ -84,14 +88,58 @@ def test_create_with_date_without_time_has_no_reminder(service, user):
     task = service.create_from_parsed(user, parsed_task(due_to=due_to))
 
     assert task.due_to == due_to
+    assert task.due_to_has_time is False
     assert task.reminders.count() == 0
+
+
+def test_create_with_today_without_time_is_allowed(service, user):
+    due_to = timezone.make_aware(
+        datetime.combine(timezone.localdate(), time.min),
+        timezone.get_current_timezone(),
+    )
+
+    task = service.create_from_parsed(user, parsed_task(due_to=due_to))
+
+    assert task.due_to == due_to
+    assert task.due_to_has_time is False
+    assert task.reminders.count() == 0
+
+
+def test_create_rejects_past_calendar_date_without_time(service, user):
+    yesterday = timezone.localdate() - timedelta(days=1)
+    due_to = timezone.make_aware(
+        datetime.combine(yesterday, time.min),
+        timezone.get_current_timezone(),
+    )
+
+    with pytest.raises(TaskDateInPastError):
+        service.create_from_parsed(user, parsed_task(due_to=due_to))
+
+
+def test_explicit_future_midnight_creates_reminder(service, user):
+    tomorrow = timezone.localdate() + timedelta(days=1)
+    due_to = timezone.make_aware(
+        datetime.combine(tomorrow, time.min),
+        timezone.get_current_timezone(),
+    )
+
+    task = service.create_from_parsed(
+        user,
+        parsed_task(due_to=due_to, due_to_has_time=True),
+    )
+
+    assert task.due_to_has_time is True
+    assert task.reminders.get().reminder_time == due_to
 
 
 def test_create_rejects_past_date_without_partial_task(service, user):
     with pytest.raises(TaskDateInPastError):
         service.create_from_parsed(
             user,
-            parsed_task(due_to=timezone.now() - timedelta(minutes=1)),
+            parsed_task(
+                due_to=timezone.now() - timedelta(minutes=1),
+                due_to_has_time=True,
+            ),
         )
 
     assert Task.objects.count() == 0
@@ -108,7 +156,10 @@ def test_create_rolls_back_when_reminder_creation_fails(
     )
 
     with pytest.raises(RuntimeError, match="Reminder storage failed"):
-        service.create_from_parsed(user, parsed_task(due_to=future_at()))
+        service.create_from_parsed(
+            user,
+            parsed_task(due_to=future_at(), due_to_has_time=True),
+        )
 
     assert Task.objects.count() == 0
     assert Reminder.objects.count() == 0
@@ -156,6 +207,7 @@ def test_set_due_date_creates_reminder_and_date_set_event(service, user, task):
     updated = service.set_due_date(user, task.id, due_to)
 
     assert updated.due_to == due_to
+    assert updated.due_to_has_time is True
     assert updated.reminders.get().reminder_time == due_to
     assert updated.events.get().event_type == TaskEvent.EventType.DATE_SET
 
@@ -191,9 +243,35 @@ def test_reschedule_replaces_pending_reminder_and_creates_event(
     updated = service.reschedule(user, task.id, new_due_to)
 
     assert updated.due_to == new_due_to
+    assert updated.due_to_has_time is True
     assert not Reminder.objects.filter(id=old_reminder.id).exists()
     assert updated.reminders.get().reminder_time == new_due_to
     assert updated.events.get().event_type == TaskEvent.EventType.RESCHEDULED
+
+
+def test_reschedule_to_date_without_time_removes_pending_reminder(
+        service, user, task):
+    old_due_to = future_at()
+    new_day = timezone.localdate() + timedelta(days=2)
+    new_due_to = timezone.make_aware(
+        datetime.combine(new_day, time.min),
+        timezone.get_current_timezone(),
+    )
+    task.due_to = old_due_to
+    task.due_to_has_time = True
+    task.save(update_fields=["due_to", "due_to_has_time"])
+    Reminder.objects.create(task=task, reminder_time=old_due_to)
+
+    updated = service.reschedule(
+        user,
+        task.id,
+        new_due_to,
+        due_to_has_time=False,
+    )
+
+    assert updated.due_to == new_due_to
+    assert updated.due_to_has_time is False
+    assert updated.reminders.count() == 0
 
 
 def test_reschedule_rejects_past_date_without_changes(service, user, task):

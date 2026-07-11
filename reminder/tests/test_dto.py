@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from reminder.services.dto import ParsedTaskInput
+from reminder.services.dto import ParsedDateResult, ParsedTaskInput
 
 
 def test_parsed_task_input_can_be_created_with_required_fields():
@@ -14,6 +14,7 @@ def test_parsed_task_input_can_be_created_with_required_fields():
     assert parsed.title == "Позвонить врачу"
     assert parsed.raw_text == "Напомни завтра позвонить врачу"
     assert parsed.due_to is None
+    assert parsed.due_to_has_time is False
     assert parsed.description is None
     assert parsed.repeat_type is None
     assert parsed.repeat_interval is None
@@ -27,9 +28,29 @@ def test_parsed_task_input_accepts_due_to_relative_to_now():
         title="Позвонить врачу",
         raw_text="Напомни через три дня позвонить врачу",
         due_to=due_to,
+        due_to_has_time=True,
     )
 
     assert parsed.due_to == datetime(2026, 7, 13, 12, 0)
+    assert parsed.due_to_has_time is True
+
+
+def test_parsed_date_result_keeps_time_precision():
+    due_to = datetime(2026, 7, 13, 0, 0)
+
+    parsed = ParsedDateResult(due_to=due_to, due_to_has_time=False)
+
+    assert parsed.due_to == due_to
+    assert parsed.due_to_has_time is False
+
+
+def test_exact_time_requires_due_to():
+    with pytest.raises(ValueError, match="Точное время задано без срока"):
+        ParsedTaskInput(
+            title="Позвонить врачу",
+            raw_text="Позвонить врачу",
+            due_to_has_time=True,
+        )
 
 
 def test_empty_title_is_invalid():

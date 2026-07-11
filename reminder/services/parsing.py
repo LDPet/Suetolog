@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from django.conf import settings
 
 from reminder.services.contracts import TaskParser
-from reminder.services.dto import ParsedTaskInput
+from reminder.services.dto import ParsedDateResult, ParsedTaskInput
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,10 @@ TASK_JSON_SCHEMA = {
             "type": ["string", "null"],
             "description": "ISO 8601 datetime в Europe/Moscow или null",
         },
+        "due_to_has_time": {
+            "type": "boolean",
+            "description": "true, если пользователь явно указал время",
+        },
         "repeat_type": {
             "type": ["string", "null"],
             "enum": ["daily", "weekly", "monthly", None],
@@ -77,6 +81,7 @@ TASK_JSON_SCHEMA = {
         "title",
         "description",
         "due_to",
+        "due_to_has_time",
         "repeat_type",
         "repeat_interval",
     ],
@@ -102,8 +107,12 @@ DATE_GENERATION_JSON_SCHEMA = {
             "type": ["string", "null"],
             "description": "ISO 8601 datetime в переданном timezone или null",
         },
+        "due_to_has_time": {
+            "type": "boolean",
+            "description": "true, если пользователь явно указал время",
+        },
     },
-    "required": ["due_to"],
+    "required": ["due_to", "due_to_has_time"],
     "additionalProperties": False,
 }
 
@@ -323,6 +332,7 @@ class MockTaskParser:
     def parse_task(self,
                    text: str,
                    now: datetime | None = None) -> ParsedTaskInput:
+        """Распознать задачу и сохранить признак явно указанного времени."""
         raw_text = (text or "").strip()
         normalized = self._normalize(raw_text)
 
@@ -333,7 +343,7 @@ class MockTaskParser:
             )
 
         current = self._resolve_now(now)
-        due_to = self._extract_due_to(normalized, current)
+        due_to, due_to_has_time = self._extract_due_to(normalized, current)
         title = self._extract_title(normalized)
 
         if self._is_unparseable_title(title):
@@ -346,11 +356,14 @@ class MockTaskParser:
             title=title,
             raw_text=raw_text,
             due_to=due_to,
+            due_to_has_time=due_to_has_time,
         )
 
-    def _extract_due_to(self, text: str, now: datetime) -> datetime | None:
+    def _extract_due_to(self, text: str,
+                        now: datetime) -> tuple[datetime | None, bool]:
+        """Извлечь тестовый срок вместе с признаком точного времени."""
         if re.search(r"\bбез\s+даты\b", text):
-            return None
+            return None, False
 
         if re.search(r"\bвчера\b", text):
             raise ParserError(
@@ -360,7 +373,6 @@ class MockTaskParser:
 
         parsed_time = self._extract_time(text)
         date = None
-        default_weekday_time = False
 
         if re.search(r"\bсегодня\b", text):
             date = now.date()
@@ -371,15 +383,21 @@ class MockTaskParser:
             if weekday is not None:
                 days_ahead = (weekday - now.weekday()) % 7
                 date = now.date() + timedelta(days=days_ahead)
-                default_weekday_time = parsed_time is None
 
         if date is None:
-            return None
+            return None, False
 
         if parsed_time is None:
-            if not default_weekday_time:
-                return None
-            parsed_time = (9, 0)
+            due_to = now.replace(
+                year=date.year,
+                month=date.month,
+                day=date.day,
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+            return due_to, False
 
         due_to = now.replace(
             year=date.year,
@@ -400,7 +418,7 @@ class MockTaskParser:
                     "Task date is in the past.",
                 )
 
-        return due_to
+        return due_to, True
 
     def _extract_title(self, text: str) -> str:
         title = text
@@ -550,6 +568,7 @@ class YandexGPTTaskParser(_YandexGPTParserBase):
     def parse_task(self,
                    text: str,
                    now: datetime | None = None) -> ParsedTaskInput:
+        """Распознать и проверить структурированные данные от YandexGPT."""
         if not isinstance(text, str) or not text.strip():
             raise ParserError(
                 ParserErrorCode.PARSER_FAILED,
@@ -578,17 +597,15 @@ class YandexGPTTaskParser(_YandexGPTParserBase):
                 description = None
 
         due_to = self._parse_due_to(payload["due_to"])
-        if due_to is not None and due_to < current:
-            raise ParserError(
-                ParserErrorCode.DATE_IN_PAST,
-                "Task date is in the past.",
-            )
+        due_to_has_time = payload["due_to_has_time"]
+        self._validate_due_to(due_to, due_to_has_time, current)
 
         try:
             parsed_task = ParsedTaskInput(
                 title=title,
                 description=description,
                 due_to=due_to,
+                due_to_has_time=due_to_has_time,
                 repeat_type=payload["repeat_type"],
                 repeat_interval=payload["repeat_interval"],
                 raw_text=text,
@@ -615,6 +632,7 @@ class YandexGPTTaskParser(_YandexGPTParserBase):
         return parsed_task
 
     def _build_system_prompt(self, now: datetime) -> str:
+        """Сформировать промпт задачи с обязательным признаком времени."""
         schema = json.dumps(YANDEX_GENERATION_JSON_SCHEMA,
                             ensure_ascii=False,
                             separators=(",", ":"))
@@ -623,6 +641,11 @@ class YandexGPTTaskParser(_YandexGPTParserBase):
                                           minute=0,
                                           second=0,
                                           microsecond=0)
+        first_monday_at_nine = (
+            now + timedelta(days=(0 - now.weekday()) % 7)).replace(
+                hour=9, minute=0, second=0, microsecond=0)
+        if first_monday_at_nine <= now:
+            first_monday_at_nine += timedelta(days=7)
         first_friday_at_nine = next_friday.replace(hour=9)
         if first_friday_at_nine <= now:
             first_friday_at_nine += timedelta(days=7)
@@ -642,17 +665,18 @@ class YandexGPTTaskParser(_YandexGPTParserBase):
 - Выбери одну главную задачу. Если задач несколько, возьми первую; не объединяй действия в title и не помещай вторую задачу в description.
 - При словах «и потом», «затем», «после этого» всё после них является второй задачей: игнорируй его полностью, description=null.
 - title — короткое главное действие. Не добавляй факты, которых нет в тексте.
-- Служебные слова «напомни» и «напомнить» не являются действием. Если кроме них и даты нет действия, верни title="" и остальные поля null.
+- Служебные слова «напомни» и «напомнить» не являются действием. Если кроме них и даты нет действия, верни title="", due_to_has_time=false, остальные nullable-поля null.
 - description — только отдельные явно сказанные детали, иначе null; не повторяй в нём title.
 - due_to — ISO 8601 datetime с UTC offset. Разрешай относительные даты через now.
-- Если дата и время не указаны, due_to=null.
-- Если указана дата без времени, используй 00:00:00 как маркер отсутствия точного времени.
+- due_to_has_time=true только если пользователь явно указал время, включая 00:00.
+- Если дата и время не указаны, due_to=null и due_to_has_time=false.
+- Если указана дата без времени, используй 00:00:00 и due_to_has_time=false.
 - Одна дата («в пятницу», «во вторник») означает разовую задачу, а не повторение. День недели без слова «прошлый» всегда разрешай в ближайшее будущее.
 - Повторение возвращай только при явных словах «каждый», «еженедельно», «по пятницам»; иначе оба repeat-поля null.
 - repeat_type и repeat_interval всегда заполняй вместе: для обычного еженедельного повтора укажи "weekly" и 1.
 - Для повторения с днём недели и временем due_to — ближайшее строго будущее первое выполнение. Если время сегодня уже прошло, выбери следующую неделю.
 - Проверяй день недели в due_to: «в пятницу» и «по пятницам» всегда дают пятницу (weekday=4), не предыдущую пятницу.
-- Если текст не является задачей или название определить нельзя, верни title="" и остальные поля null.
+- Если текст не является задачей или название определить нельзя, верни title="", due_to_has_time=false, остальные nullable-поля null.
 - Для явной прошедшей даты верни вычисленную дату; приложение само отклонит её.
 
 JSON Schema:
@@ -660,23 +684,24 @@ JSON Schema:
 
 Примеры:
 При now=2026-07-04T10:00:00+03:00 текст "Отправить отчёт сегодня до 18, добавить цифры продаж":
-{{"title":"Отправить отчёт","description":"Добавить цифры продаж","due_to":"2026-07-04T18:00:00+03:00","repeat_type":null,"repeat_interval":null}}
+{{"title":"Отправить отчёт","description":"Добавить цифры продаж","due_to":"2026-07-04T18:00:00+03:00","due_to_has_time":true,"repeat_type":null,"repeat_interval":null}}
 Текст "Купить корм для кота":
-{{"title":"Купить корм для кота","description":null,"due_to":null,"repeat_type":null,"repeat_interval":null}}
+{{"title":"Купить корм для кота","description":null,"due_to":null,"due_to_has_time":false,"repeat_type":null,"repeat_interval":null}}
 Текст "Каждый понедельник в 9 проверить финансы":
-{{"title":"Проверить финансы","description":null,"due_to":null,"repeat_type":"weekly","repeat_interval":1}}
+{{"title":"Проверить финансы","description":null,"due_to":"{first_monday_at_nine.isoformat()}","due_to_has_time":true,"repeat_type":"weekly","repeat_interval":1}}
 Текст "В пятницу позвонить врачу":
-{{"title":"Позвонить врачу","description":null,"due_to":"{next_friday.isoformat()}","repeat_type":null,"repeat_interval":null}}
+{{"title":"Позвонить врачу","description":null,"due_to":"{next_friday.isoformat()}","due_to_has_time":false,"repeat_type":null,"repeat_interval":null}}
 Текст "Напомни в пятницу":
-{{"title":"","description":null,"due_to":null,"repeat_type":null,"repeat_interval":null}}
+{{"title":"","description":null,"due_to":null,"due_to_has_time":false,"repeat_type":null,"repeat_interval":null}}
 Текст "По пятницам в 9 проверять финансы":
-{{"title":"Проверить финансы","description":null,"due_to":"{first_friday_at_nine.isoformat()}","repeat_type":"weekly","repeat_interval":1}}
+{{"title":"Проверить финансы","description":null,"due_to":"{first_friday_at_nine.isoformat()}","due_to_has_time":true,"repeat_type":"weekly","repeat_interval":1}}
 Текст "Завтра в 15:30 купить продукты и потом забрать посылку":
-{{"title":"Купить продукты","description":null,"due_to":"{tomorrow_at_1530.isoformat()}","repeat_type":null,"repeat_interval":null}}
+{{"title":"Купить продукты","description":null,"due_to":"{tomorrow_at_1530.isoformat()}","due_to_has_time":true,"repeat_type":null,"repeat_interval":null}}
 Текст "Сделать то же что вчера":
-{{"title":"Сделать то же","description":null,"due_to":"{yesterday.isoformat()}","repeat_type":null,"repeat_interval":null}}"""
+{{"title":"Сделать то же","description":null,"due_to":"{yesterday.isoformat()}","due_to_has_time":false,"repeat_type":null,"repeat_interval":null}}"""
 
     def _decode_and_validate(self, model_response: str) -> dict:
+        """Декодировать ответ парсера задачи и проверить JSON-схему."""
         try:
             payload = json.loads(model_response)
         except (TypeError, json.JSONDecodeError) as error:
@@ -700,6 +725,7 @@ JSON Schema:
 
     @staticmethod
     def _matches_schema(payload: object) -> bool:
+        """Проверить типы всех обязательных полей ответа с задачей."""
         if not isinstance(payload, dict):
             return False
 
@@ -718,6 +744,12 @@ JSON Schema:
                 payload["due_to"], str):
             return False
 
+        if not isinstance(payload["due_to_has_time"], bool):
+            return False
+
+        if payload["due_to"] is None and payload["due_to_has_time"]:
+            return False
+
         if payload["repeat_type"] not in ("daily", "weekly", "monthly", None):
             return False
 
@@ -732,7 +764,34 @@ JSON Schema:
         return True
 
     def _parse_due_to(self, value: str | None) -> datetime | None:
-        return self._parse_datetime(value)
+        if value is None:
+            return None
+
+        due_to = self._parse_datetime(value)
+        if due_to is None:
+            raise ParserError(
+                ParserErrorCode.PARSER_FAILED,
+                "YandexGPT returned an invalid due_to value.",
+            )
+        return due_to
+
+    @staticmethod
+    def _validate_due_to(due_to: datetime | None, due_to_has_time: bool,
+                         current: datetime) -> None:
+        """Отклонить прошедший срок с учётом точности времени."""
+        if due_to is None:
+            return
+
+        if due_to_has_time:
+            is_past = due_to <= current
+        else:
+            is_past = due_to.date() < current.date()
+
+        if is_past:
+            raise ParserError(
+                ParserErrorCode.DATE_IN_PAST,
+                "Task date is in the past.",
+            )
 
 
 class YandexGPTDateParser(_YandexGPTParserBase):
@@ -743,7 +802,10 @@ class YandexGPTDateParser(_YandexGPTParserBase):
         re.IGNORECASE,
     )
 
-    def parse_date(self, text: str, now: datetime | None = None) -> datetime:
+    def parse_date(self,
+                   text: str,
+                   now: datetime | None = None) -> ParsedDateResult:
+        """Распознать дату и вернуть признак явно указанного времени."""
         if not isinstance(text, str) or not text.strip():
             raise ParserError(
                 ParserErrorCode.PARSER_FAILED,
@@ -771,18 +833,30 @@ class YandexGPTDateParser(_YandexGPTParserBase):
                 "YandexGPT could not recognize a date.",
             )
 
-        if due_to < current and self._ONLY_TIME_RE.fullmatch(text.strip()):
+        due_to_has_time = payload["due_to_has_time"]
+
+        if (due_to_has_time and due_to <= current
+                and self._ONLY_TIME_RE.fullmatch(text.strip())):
             due_to += timedelta(days=1)
 
-        if due_to < current:
+        if due_to_has_time:
+            is_past = due_to <= current
+        else:
+            is_past = due_to.date() < current.date()
+
+        if is_past:
             raise ParserError(
                 ParserErrorCode.DATE_IN_PAST,
                 "Parsed date is in the past.",
             )
 
-        return due_to
+        return ParsedDateResult(
+            due_to=due_to,
+            due_to_has_time=due_to_has_time,
+        )
 
     def _build_system_prompt(self, now: datetime) -> str:
+        """Сформировать промпт, отличающий полночь от отсутствия времени."""
         schema = json.dumps(DATE_GENERATION_JSON_SCHEMA,
                             ensure_ascii=False,
                             separators=(",", ":"))
@@ -794,16 +868,20 @@ class YandexGPTDateParser(_YandexGPTParserBase):
         )
         in_thirty_minutes = now + timedelta(minutes=30)
 
-        def next_weekday_at(weekday: int, hour: int = 0) -> datetime:
+        def next_weekday_at(weekday: int,
+                            hour: int = 0,
+                            has_time: bool = True) -> datetime:
             result = (now +
                       timedelta(days=(weekday - now.weekday()) % 7)).replace(
                           hour=hour, minute=0, second=0, microsecond=0)
-            if result < now:
+            if ((has_time and result <= now)
+                    or (not has_time and result.date() < now.date())):
                 result += timedelta(days=7)
             return result
 
         next_monday_at_nine = next_weekday_at(0, 9)
-        next_friday = next_weekday_at(4)
+        next_friday_date = next_weekday_at(4, has_time=False)
+        next_friday_midnight = next_weekday_at(4, has_time=True)
         days_since_monday = (now.weekday() - 0) % 7 or 7
         previous_monday_at_nine = (now -
                                    timedelta(days=days_since_monday)).replace(
@@ -817,10 +895,11 @@ class YandexGPTDateParser(_YandexGPTParserBase):
 
 Правила:
 - due_to — ISO 8601 datetime с UTC offset в часовом поясе {self._timezone_name}.
+- due_to_has_time=true только если пользователь явно указал время, включая 00:00.
 - Разрешай "сегодня", "завтра", "послезавтра", дни недели и относительные интервалы через now.
 - День недели означает ближайшее подходящее наступление, которое ещё не прошло. Проверь, что weekday в due_to соответствует названному дню: понедельник=0, вторник=1, среда=2, четверг=3, пятница=4, суббота=5, воскресенье=6.
-- Если указан только час без дня, выбери ближайшее такое время: сегодня, если оно не раньше now, иначе завтра.
-- Если указана дата без времени, используй 00:00:00 как маркер отсутствия точного времени.
+- Если указан только час без дня, выбери ближайшее такое время: сегодня, если оно строго позже now, иначе завтра.
+- Если указана дата без времени, используй 00:00:00 и due_to_has_time=false.
 - Для явной прошедшей даты верни вычисленный datetime; приложение само отклонит её.
 - Для нулевого или отрицательного относительного интервала верни due_to=null.
 - Для несуществующей календарной даты или времени, например "31 февраля" или "25:00", верни due_to=null. Не исправляй такую дату на ближайшую существующую.
@@ -830,18 +909,19 @@ JSON Schema:
 {schema}
 
 Примеры для текущего времени выше:
-"завтра в 15:00" -> {{"due_to":"{tomorrow_at_fifteen.isoformat()}"}}
-"в понедельник в 9" -> {{"due_to":"{next_monday_at_nine.isoformat()}"}}
-"в пятницу" -> {{"due_to":"{next_friday.isoformat()}"}}
-"в пятницу в 00:00" -> {{"due_to":"{next_friday.isoformat()}"}}
-"прошлый понедельник в 9" -> {{"due_to":"{previous_monday_at_nine.isoformat()}"}}
-"через 30 минут" -> {{"due_to":"{in_thirty_minutes.isoformat()}"}}
-"через 0 минут" -> {{"due_to":null}}
-"31 февраля в 10" -> {{"due_to":null}}
-"потом" -> {{"due_to":null}}"""
+"завтра в 15:00" -> {{"due_to":"{tomorrow_at_fifteen.isoformat()}","due_to_has_time":true}}
+"в понедельник в 9" -> {{"due_to":"{next_monday_at_nine.isoformat()}","due_to_has_time":true}}
+"в пятницу" -> {{"due_to":"{next_friday_date.isoformat()}","due_to_has_time":false}}
+"в пятницу в 00:00" -> {{"due_to":"{next_friday_midnight.isoformat()}","due_to_has_time":true}}
+"прошлый понедельник в 9" -> {{"due_to":"{previous_monday_at_nine.isoformat()}","due_to_has_time":true}}
+"через 30 минут" -> {{"due_to":"{in_thirty_minutes.isoformat()}","due_to_has_time":true}}
+"через 0 минут" -> {{"due_to":null,"due_to_has_time":false}}
+"31 февраля в 10" -> {{"due_to":null,"due_to_has_time":false}}
+"потом" -> {{"due_to":null,"due_to_has_time":false}}"""
 
     @staticmethod
     def _decode_and_validate(model_response: str) -> dict:
+        """Декодировать ответ парсера даты и проверить структуру JSON."""
         try:
             payload = json.loads(model_response)
         except (TypeError, json.JSONDecodeError) as error:
@@ -855,7 +935,9 @@ JSON Schema:
                 "YandexGPT returned invalid date JSON.",
             ) from error
 
-        if not isinstance(payload, dict) or set(payload) != {"due_to"}:
+        if not isinstance(payload, dict) or set(payload) != {
+                "due_to", "due_to_has_time"
+        }:
             raise ParserError(
                 ParserErrorCode.PARSER_FAILED,
                 "YandexGPT response does not match the date schema.",
@@ -863,6 +945,18 @@ JSON Schema:
 
         if payload["due_to"] is not None and not isinstance(
                 payload["due_to"], str):
+            raise ParserError(
+                ParserErrorCode.PARSER_FAILED,
+                "YandexGPT response does not match the date schema.",
+            )
+
+        if not isinstance(payload["due_to_has_time"], bool):
+            raise ParserError(
+                ParserErrorCode.PARSER_FAILED,
+                "YandexGPT response does not match the date schema.",
+            )
+
+        if payload["due_to"] is None and payload["due_to_has_time"]:
             raise ParserError(
                 ParserErrorCode.PARSER_FAILED,
                 "YandexGPT response does not match the date schema.",

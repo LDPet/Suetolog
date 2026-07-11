@@ -27,6 +27,7 @@ class Task(models.Model):
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True, default="")
     due_to = models.DateTimeField(null=True, blank=True)
+    due_to_has_time = models.BooleanField(default=False)
     repeat_type = models.CharField(
         max_length=20,
         choices=RepeatType.choices,

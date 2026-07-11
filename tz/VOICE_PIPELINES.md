@@ -65,7 +65,7 @@ sequenceDiagram
 Минимальные сущности берутся из `tz/tables.md`:
 
 - `User(id, chat_id)` — владелец задачи.
-- `Task(title, description, due_to, repeat_type, repeat_interval, status, created_at, uid)` — созданная задача.
+- `Task(title, description, due_to, due_to_has_time, repeat_type, repeat_interval, status, created_at, uid)` — созданная задача.
 - `Reminder(reminder_time, sent_time, reaction, message_id, task_id)` — будущее точечное напоминание.
 - `TaskEvent(task_id, event_type, created_at)` — событие создания задачи.
 
@@ -96,9 +96,16 @@ class ParsedTaskInput:
     title: str
     description: str | None
     due_to: datetime | None
+    due_to_has_time: bool
     repeat_type: str | None
     repeat_interval: int | None
     raw_text: str
+
+
+@dataclass
+class ParsedDateResult:
+    due_to: datetime
+    due_to_has_time: bool
 ```
 
 Правила полей:
@@ -108,6 +115,7 @@ class ParsedTaskInput:
 | `title` | Обязательное короткое название из главного действия пользователя |
 | `description` | Детали из исходного текста или `null` |
 | `due_to` | Дата и время в timezone `Europe/Moscow` или `null` |
+| `due_to_has_time` | `true`, если пользователь явно указал точное время, включая `00:00`; иначе `false` |
 | `repeat_type` | `daily`, `weekly`, `monthly` или `null` |
 | `repeat_interval` | Целое число от `1`, если есть повторение, иначе `null` |
 | `raw_text` | Распознанный или исходный пользовательский текст |
@@ -242,6 +250,10 @@ System prompt должен требовать:
       "type": ["string", "null"],
       "description": "ISO 8601 datetime в Europe/Moscow, если дата или время указаны в тексте"
     },
+    "due_to_has_time": {
+      "type": "boolean",
+      "description": "Было ли точное время явно указано пользователем"
+    },
     "repeat_type": {
       "type": ["string", "null"],
       "enum": ["daily", "weekly", "monthly", null],
@@ -253,7 +265,7 @@ System prompt должен требовать:
       "description": "Интервал повторения; null без повторения"
     }
   },
-  "required": ["title", "description", "due_to", "repeat_type", "repeat_interval"],
+  "required": ["title", "description", "due_to", "due_to_has_time", "repeat_type", "repeat_interval"],
   "additionalProperties": false
 }
 ```
@@ -262,9 +274,10 @@ System prompt должен требовать:
 
 | Вход | JSON |
 | --- | --- |
-| `Отправить отчёт сегодня до 18, добавить цифры продаж` | `{"title":"Отправить отчёт","description":"Добавить цифры продаж","due_to":"2026-07-04T18:00:00+03:00","repeat_type":null,"repeat_interval":null}` |
-| `Купить корм для кота` | `{"title":"Купить корм для кота","description":null,"due_to":null,"repeat_type":null,"repeat_interval":null}` |
-| `Каждый понедельник в 9 проверить финансы` | `{"title":"Проверить финансы","description":null,"due_to":null,"repeat_type":"weekly","repeat_interval":1}` |
+| `Отправить отчёт сегодня до 18, добавить цифры продаж` | `{"title":"Отправить отчёт","description":"Добавить цифры продаж","due_to":"2026-07-04T18:00:00+03:00","due_to_has_time":true,"repeat_type":null,"repeat_interval":null}` |
+| `В пятницу позвонить врачу` | `{"title":"Позвонить врачу","description":null,"due_to":"2026-07-10T00:00:00+03:00","due_to_has_time":false,"repeat_type":null,"repeat_interval":null}` |
+| `Купить корм для кота` | `{"title":"Купить корм для кота","description":null,"due_to":null,"due_to_has_time":false,"repeat_type":null,"repeat_interval":null}` |
+| `Каждый понедельник в 9 проверить финансы` | `{"title":"Проверить финансы","description":null,"due_to":"2026-07-06T09:00:00+03:00","due_to_has_time":true,"repeat_type":"weekly","repeat_interval":1}` |
 
 Если API не вернул валидный JSON по схеме, задача не создаётся.
 
@@ -275,9 +288,9 @@ System prompt должен требовать:
 | Валидный `title` | Использовать как `Task.title` |
 | `description=null` | Сохранить пустую строку в `Task.description` |
 | `due_to=null` | Создать задачу без даты и без `Reminder` |
-| `due_to` содержит дату и время в будущем | Создать задачу и один будущий `Reminder` |
-| `due_to` содержит только дату | Создать задачу без точечного `Reminder` |
-| `due_to` в прошлом | Не создавать задачу, попросить пользователя указать будущую дату |
+| `due_to_has_time=true`, точный срок в будущем | Создать задачу и один будущий `Reminder` |
+| `due_to_has_time=false`, дата сегодня или в будущем | Создать задачу без точечного `Reminder` |
+| Прошедшая календарная дата либо точный срок `<= now` | Не создавать задачу, попросить пользователя указать будущую дату |
 | `repeat_type=null` | Создать обычную задачу без повторения |
 | `repeat_type` заполнен | Сохранить `repeat_type` и `repeat_interval` в `Task` |
 | Пустой `title` | Не создавать задачу, попросить сформулировать задачу понятнее |
@@ -291,9 +304,9 @@ System prompt должен требовать:
 Сервис выполняет шаги:
 
 1. Проверить, что `ParsedTaskInput.title` не пустой.
-2. Проверить, что `due_to` не находится в прошлом.
+2. Для даты без времени разрешить сегодня и будущие дни; точный datetime потребовать строго в будущем.
 3. Создать `Task` со статусом `active` и владельцем `user`.
-4. Создать `Reminder`, если `due_to` содержит будущие дату и время.
+4. Создать `Reminder`, только если `due_to_has_time=true` и точный срок находится в будущем.
 5. Создать `TaskEvent` с событием создания.
 6. Вернуть созданную задачу в handler.
 
