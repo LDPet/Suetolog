@@ -4,6 +4,13 @@ from datetime import datetime
 
 
 @dataclass(frozen=True)
+class STTResult:
+    text: str
+    language: str | None = "ru-RU"
+    provider: str = "yandex_speechkit"
+
+
+@dataclass(frozen=True)
 class ParsedTaskInput:
     title: str
     raw_text: str
