@@ -172,6 +172,10 @@ def test_yandex_date_parser_uses_separate_prompt_and_schema():
     assert '"required":["due_to","due_to_has_time"]' in system_prompt
     assert "due_to_has_time=true" in system_prompt
     assert "title или description" in system_prompt
+    assert "Календарь от now" in system_prompt
+    assert "2026-07-11 — суббота" in system_prompt
+    assert "следующую среду" in system_prompt
+    assert "среду через 2 недели" in system_prompt
     assert user_text == "завтра в 15:00"
     assert schema == DATE_GENERATION_JSON_SCHEMA
 

@@ -18,13 +18,16 @@ NOW = datetime(2026, 7, 4, 10, 0, tzinfo=MSK)
 
 class StubClient:
 
-    def __init__(self, response):
-        self.response = response
+    def __init__(self, responses):
+        if isinstance(responses, list):
+            self.responses = responses.copy()
+        else:
+            self.responses = [responses]
         self.calls = []
 
-    def complete(self, system_prompt, user_text):
-        self.calls.append((system_prompt, user_text))
-        return self.response
+    def complete(self, system_prompt, user_text, json_schema=None):
+        self.calls.append((system_prompt, user_text, json_schema))
+        return self.responses.pop(0)
 
 
 class FakeHTTPResponse:
@@ -46,13 +49,19 @@ def task_response(**overrides):
     payload = {
         "title": "Купить корм для кота",
         "description": None,
-        "due_to": None,
-        "due_to_has_time": False,
+        "date_hint": None,
         "repeat_type": None,
         "repeat_interval": None,
     }
     payload.update(overrides)
     return json.dumps(payload, ensure_ascii=False)
+
+
+def date_response(due_to, due_to_has_time=False):
+    return json.dumps({
+        "due_to": due_to,
+        "due_to_has_time": due_to_has_time,
+    })
 
 
 def api_response(text):
@@ -69,149 +78,193 @@ def api_response(text):
 
 
 @pytest.mark.parametrize(
-    ("transcript", "response", "expected"),
+    ("transcript", "responses", "expected"),
     [
         (
             "Купить корм для кота",
-            task_response(),
-            {
-                "title": "Купить корм для кота",
-                "description": None,
-                "due_to": None,
-                "due_to_has_time": False,
-                "repeat_type": None,
-                "repeat_interval": None,
-            },
+            [task_response()],
+            ("Купить корм для кота", None, None, False, None, None),
         ),
         (
             "Отправить отчёт сегодня до 18, добавить цифры продаж",
-            task_response(
-                title="Отправить отчёт",
-                description="Добавить цифры продаж",
-                due_to="2026-07-04T18:00:00+03:00",
-                due_to_has_time=True,
+            [
+                task_response(
+                    title="Отправить отчёт",
+                    description="Добавить цифры продаж",
+                    date_hint="сегодня до 18",
+                ),
+                date_response("2026-07-04T18:00:00+03:00", True),
+            ],
+            (
+                "Отправить отчёт",
+                "Добавить цифры продаж",
+                datetime(2026, 7, 4, 18, 0, tzinfo=MSK),
+                True,
+                None,
+                None,
             ),
-            {
-                "title": "Отправить отчёт",
-                "description": "Добавить цифры продаж",
-                "due_to": datetime(2026, 7, 4, 18, 0, tzinfo=MSK),
-                "due_to_has_time": True,
-                "repeat_type": None,
-                "repeat_interval": None,
-            },
         ),
         (
             "Каждый понедельник в 9 проверить финансы",
-            task_response(
-                title="Проверить финансы",
-                due_to="2026-07-06T09:00:00+03:00",
-                due_to_has_time=True,
-                repeat_type="weekly",
-                repeat_interval=1,
+            [
+                task_response(
+                    title="Проверить финансы",
+                    date_hint="Каждый понедельник в 9",
+                    repeat_type="weekly",
+                    repeat_interval=1,
+                ),
+                date_response("2026-07-06T09:00:00+03:00", True),
+            ],
+            (
+                "Проверить финансы",
+                None,
+                datetime(2026, 7, 6, 9, 0, tzinfo=MSK),
+                True,
+                "weekly",
+                1,
             ),
-            {
-                "title": "Проверить финансы",
-                "description": None,
-                "due_to": datetime(2026, 7, 6, 9, 0, tzinfo=MSK),
-                "due_to_has_time": True,
-                "repeat_type": "weekly",
-                "repeat_interval": 1,
-            },
         ),
     ],
 )
-def test_yandex_parser_parses_voice_pipeline_examples(transcript, response,
-                                                      expected):
-    client = StubClient(response)
+def test_yandex_parser_orchestrates_semantics_and_date(transcript, responses,
+                                                       expected):
+    client = StubClient(responses)
 
     parsed = YandexGPTTaskParser(client=client).parse_task(transcript, now=NOW)
 
-    assert parsed.title == expected["title"]
-    assert parsed.description == expected["description"]
-    assert parsed.due_to == expected["due_to"]
-    assert parsed.due_to_has_time == expected["due_to_has_time"]
-    assert parsed.repeat_type == expected["repeat_type"]
-    assert parsed.repeat_interval == expected["repeat_interval"]
+    assert (
+        parsed.title,
+        parsed.description,
+        parsed.due_to,
+        parsed.due_to_has_time,
+        parsed.repeat_type,
+        parsed.repeat_interval,
+    ) == expected
     assert parsed.raw_text == transcript
+    assert len(client.calls) == len(responses)
+    assert client.calls[0][2] == YANDEX_GENERATION_JSON_SCHEMA
+    if len(responses) == 2:
+        assert client.calls[1][2] == DATE_GENERATION_JSON_SCHEMA
 
 
-def test_yandex_parser_prompt_contains_now_schema_and_examples():
+def test_yandex_parser_prompt_contains_semantic_schema_and_calendar():
     client = StubClient(task_response())
 
     YandexGPTTaskParser(client=client).parse_task("Купить корм", now=NOW)
 
-    system_prompt, user_text = client.calls[0]
+    system_prompt, user_text, schema = client.calls[0]
     assert "2026-07-04T10:00:00+03:00" in system_prompt
-    assert '"additionalProperties":false' in system_prompt
-    assert '"minLength":0' in system_prompt
-    assert "Отправить отчёт сегодня до 18" in system_prompt
-    assert "Каждый понедельник в 9" in system_prompt
-    assert "В пятницу позвонить врачу" in system_prompt
-    assert "Одна дата («в пятницу», «во вторник»)" in system_prompt
-    assert "Служебные слова «напомни»" in system_prompt
-    assert 'верни title="", due_to_has_time=false' in system_prompt
-    assert "При словах «и потом», «затем», «после этого»" in system_prompt
-    assert "ближайшее строго будущее первое выполнение" in system_prompt
-    assert "По пятницам в 9 проверять финансы" in system_prompt
+    assert "Календарь от now" in system_prompt
+    assert "2026-07-05 — воскресенье" in system_prompt
+    assert "date_hint" in system_prompt
+    assert "Не вычисляй datetime" in system_prompt
     assert "Сделать то же что вчера" in system_prompt
-    assert '"due_to":"2026-07-10T00:00:00+03:00"' in system_prompt
-    assert '"due_to":"2026-07-06T09:00:00+03:00"' in system_prompt
-    assert '"due_to":"2026-07-10T09:00:00+03:00"' in system_prompt
-    assert '"due_to":"2026-07-05T15:30:00+03:00"' in system_prompt
-    assert '"due_to":"2026-07-03T00:00:00+03:00"' in system_prompt
+    assert '"date_hint":"сегодня до 18"' in system_prompt
+    assert '"date_hint":"В пятницу"' in system_prompt
     assert user_text == "Купить корм"
+    assert schema == YANDEX_GENERATION_JSON_SCHEMA
+    assert "date_hint" in schema["properties"]
+    assert "due_to" not in schema["properties"]
 
 
-def test_yandex_parser_rejects_exact_datetime_equal_to_now():
-    response = task_response(
-        due_to=NOW.isoformat(),
-        due_to_has_time=True,
-    )
+@pytest.mark.parametrize(
+    ("transcript", "date_hint", "due_to"),
+    [
+        ("Во вторник почесать яйца", "Во вторник",
+         "2026-07-14T00:00:00+03:00"),
+        ("В следующую среду сходить в спортзал", "В следующую среду",
+         "2026-07-22T00:00:00+03:00"),
+        ("В среду через 2 недели починить ноутбук", "В среду через 2 недели",
+         "2026-07-29T00:00:00+03:00"),
+    ],
+)
+def test_yandex_parser_resolves_weekday_examples(transcript, date_hint,
+                                                 due_to):
+    now = datetime(2026, 7, 12, 3, 0, tzinfo=MSK)
+    client = StubClient([
+        task_response(title="Выполнить задачу", date_hint=date_hint),
+        date_response(due_to),
+    ])
+
+    parsed = YandexGPTTaskParser(client=client).parse_task(transcript, now=now)
+
+    assert parsed.due_to == datetime.fromisoformat(due_to)
+    assert parsed.due_to.weekday() in (1, 2)
+    assert parsed.due_to_has_time is False
+
+
+def test_yandex_parser_rejects_weekday_mismatch():
+    client = StubClient([
+        task_response(title="Сходить в спортзал",
+                      date_hint="в следующую среду"),
+        date_response("2026-07-19T00:00:00+03:00"),
+    ])
 
     with pytest.raises(ParserError) as exc_info:
-        YandexGPTTaskParser(client=StubClient(response)).parse_task(
-            "Купить корм сейчас",
+        YandexGPTTaskParser(client=client).parse_task(
+            "В следующую среду сходить в спортзал",
+            now=datetime(2026, 7, 12, 3, 0, tzinfo=MSK),
+        )
+
+    assert exc_info.value.code == ParserErrorCode.PARSER_FAILED
+
+
+def test_yandex_parser_discards_repeat_without_explicit_marker():
+    client = StubClient([
+        task_response(
+            title="Почесать яйца",
+            date_hint="Во вторник",
+            repeat_type="weekly",
+            repeat_interval=None,
+        ),
+        date_response("2026-07-14T00:00:00+03:00"),
+    ])
+
+    parsed = YandexGPTTaskParser(client=client).parse_task(
+        "Во вторник почесать яйца",
+        now=datetime(2026, 7, 12, 3, 0, tzinfo=MSK),
+    )
+
+    assert parsed.repeat_type is None
+    assert parsed.repeat_interval is None
+
+
+def test_yandex_parser_propagates_date_error():
+    client = StubClient([
+        task_response(title="Позвонить врачу", date_hint="вчера"),
+        date_response("2026-07-03T00:00:00+03:00"),
+    ])
+
+    with pytest.raises(ParserError) as exc_info:
+        YandexGPTTaskParser(client=client).parse_task(
+            "Напомни вчера позвонить врачу",
             now=NOW,
         )
 
     assert exc_info.value.code == ParserErrorCode.DATE_IN_PAST
 
 
-def test_yandex_parser_allows_today_without_time():
-    response = task_response(
-        due_to="2026-07-04T00:00:00+03:00",
-        due_to_has_time=False,
-    )
+def test_yandex_parser_rejects_contextual_yesterday_as_non_task():
+    client = StubClient(task_response(title="", date_hint=None))
 
-    parsed = YandexGPTTaskParser(client=StubClient(response)).parse_task(
-        "Сегодня купить корм",
-        now=NOW,
-    )
+    with pytest.raises(ParserError) as exc_info:
+        YandexGPTTaskParser(client=client).parse_task(
+            "Сделать то же что вчера",
+            now=NOW,
+        )
 
-    assert parsed.due_to == datetime(2026, 7, 4, 0, 0, tzinfo=MSK)
-    assert parsed.due_to_has_time is False
-
-
-def test_yandex_parser_reports_empty_title_after_schema_validation():
-    with pytest.raises(ParserError,
-                       match="YandexGPT returned an empty task title"):
-        YandexGPTTaskParser(client=StubClient(task_response(
-            title=""))).parse_task(
-                "Привет как дела",
-                now=NOW,
-            )
+    assert exc_info.value.code == ParserErrorCode.PARSER_FAILED
+    assert len(client.calls) == 1
 
 
 def test_yandex_parser_removes_description_that_duplicates_title():
     response = task_response(
         title="Позвонить врачу",
         description="Позвонить врачу",
-        due_to="2026-07-04T18:00:00+03:00",
-        due_to_has_time=True,
     )
 
     parsed = YandexGPTTaskParser(client=StubClient(response)).parse_task(
-        "Напомни сегодня в 18:00 позвонить врачу",
+        "Позвонить врачу",
         now=NOW,
     )
 
@@ -225,13 +278,10 @@ def test_yandex_parser_removes_description_that_duplicates_title():
         "```json\n" + task_response() + "\n```",
         task_response(title="   "),
         task_response(unexpected="field"),
-        task_response(due_to="2026-07-05T12:00:00", due_to_has_time=True),
-        task_response(due_to="not-a-date", due_to_has_time=False),
-        task_response(due_to_has_time=True),
-        task_response(repeat_type="weekly", repeat_interval=None),
+        task_response(date_hint=123),
     ],
 )
-def test_yandex_parser_rejects_invalid_model_output(response):
+def test_yandex_parser_rejects_invalid_semantic_output(response):
     with pytest.raises(ParserError) as exc_info:
         YandexGPTTaskParser(client=StubClient(response)).parse_task(
             "Купить корм",
@@ -241,20 +291,32 @@ def test_yandex_parser_rejects_invalid_model_output(response):
     assert exc_info.value.code == ParserErrorCode.PARSER_FAILED
 
 
-def test_yandex_parser_rejects_past_date():
+def test_yandex_parser_rejects_inconsistent_explicit_repeat():
     response = task_response(
-        title="Сделать то же что вчера",
-        due_to="2026-07-03T10:00:00+03:00",
-        due_to_has_time=True,
+        title="Проверить финансы",
+        repeat_type="weekly",
+        repeat_interval=None,
     )
 
     with pytest.raises(ParserError) as exc_info:
         YandexGPTTaskParser(client=StubClient(response)).parse_task(
-            "Сделать то же что вчера",
+            "Каждый понедельник проверить финансы",
             now=NOW,
         )
 
-    assert exc_info.value.code == ParserErrorCode.DATE_IN_PAST
+    assert exc_info.value.code == ParserErrorCode.PARSER_FAILED
+
+
+def test_yandex_parser_rejects_invented_date_hint():
+    response = task_response(title="Купить корм", date_hint="завтра")
+
+    with pytest.raises(ParserError) as exc_info:
+        YandexGPTTaskParser(client=StubClient(response)).parse_task(
+            "Купить корм",
+            now=NOW,
+        )
+
+    assert exc_info.value.code == ParserErrorCode.PARSER_FAILED
 
 
 def test_yandex_parser_rejects_empty_transcript_without_api_call():

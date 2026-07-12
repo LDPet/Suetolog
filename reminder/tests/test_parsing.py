@@ -72,6 +72,25 @@ def test_mock_parser_allows_today_without_time():
     assert parsed.due_to_has_time is False
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("во вторник позвонить врачу", datetime(2026, 7, 14, 0, 0)),
+        ("в следующую среду сходить в спортзал", datetime(2026, 7, 22, 0, 0)),
+        ("в среду через 2 недели починить ноутбук", datetime(
+            2026, 7, 29, 0, 0)),
+    ],
+)
+def test_mock_parser_resolves_complex_weekdays(text, expected):
+    parsed = MockTaskParser().parse_task(
+        text,
+        now=datetime(2026, 7, 12, 3, 0),
+    )
+
+    assert parsed.due_to == expected
+    assert parsed.due_to_has_time is False
+
+
 @pytest.mark.parametrize("text", ["", "   ", "э-э-э...", "молоко"])
 def test_mock_parser_raises_parser_failed_for_unstable_text(text):
     with pytest.raises(ParserError) as exc_info:
