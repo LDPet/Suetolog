@@ -1,4 +1,4 @@
-.PHONY: install check lint test format fix up down migrate
+.PHONY: install check lint test format fix up down migrate worker beat
 
 PIPENV = pipenv
 PY_FILES := $(shell git ls-files '*.py')
@@ -31,3 +31,9 @@ logs:
 	docker compose logs -f
 migrate:
 	python manage.py migrate
+
+worker:
+	$(PIPENV) run celery -A config worker --loglevel=info --pool=solo
+
+beat:
+	$(PIPENV) run celery -A config beat --loglevel=info
