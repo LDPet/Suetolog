@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -140,3 +141,25 @@ if not TELEGRAM_BOT_TOKEN:
 VOICE_MAX_DURATION_SEC = 60
 VOICE_MAX_SIZE_BYTES = 20 * 1024 * 1024
 DEFAULT_BATCH_LIMIT = 100
+
+REMINDER_CHECK_INTERVAL_MINUTES = int(
+    os.getenv("REMINDER_CHECK_INTERVAL_MINUTES", "1"))
+if REMINDER_CHECK_INTERVAL_MINUTES < 1:
+    raise ValueError("REMINDER_CHECK_INTERVAL_MINUTES must be at least 1")
+
+CELERY_BROKER_URL = os.getenv(
+    "CELERY_BROKER_URL",
+    os.getenv("REDIS_URL", "redis://localhost:6379/0"),
+)
+CELERY_TIMEZONE = DEFAULT_TIMEZONE
+CELERY_ENABLE_UTC = True
+CELERY_TASK_IGNORE_RESULT = True
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_BEAT_SCHEDULE = {
+    "send-due-reminders": {
+        "task": "reminder.tasks.send_due_reminders",
+        "schedule": timedelta(minutes=REMINDER_CHECK_INTERVAL_MINUTES),
+    },
+}

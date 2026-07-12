@@ -63,11 +63,9 @@ REMINDER_CHECK_INTERVAL_MINUTES = 1
 Команды ниже являются актуальными для MVP.
 python manage.py migrate
 python manage.py runbot
-docker compose up --build
-
-# TODO: имена Celery app/tasks уточнить в коде
-celery -A config worker -l info
-celery -A config beat -l info
+make up
+make worker
+make beat
 
 pytest
 pytest --cov
@@ -114,6 +112,22 @@ isort .
 make up
 docker compose ps # убедиться, что контейнеры запустились и статус healthy
 ```
+
+После миграций запустите в отдельных терминалах Telegram-бота, Celery worker и
+Celery Beat:
+
+```bash
+python manage.py runbot
+make worker
+make beat
+```
+
+Beat ставит `reminder.tasks.send_due_reminders` в очередь с интервалом
+`REMINDER_CHECK_INTERVAL_MINUTES` (по умолчанию одна минута). Worker подключается
+к Redis по `REDIS_URL` и отправляет наступившие напоминания как карточки задачи с
+кнопками `Сделано` и `Удалить`. После отправки сервис сохраняет `sent_time`,
+`message_id` и одно событие `reminder_sent`.
+
 Остановка:
 ```bash
 make down
@@ -137,7 +151,13 @@ make up
 python manage.py migrate
 ```
 
-4. Запустить Django, Celery Worker, Celery Beat и Telegram-бота.
+4. В отдельных терминалах запустить Telegram-бота, Celery Worker и Celery Beat:
+
+```bash
+python manage.py runbot
+make worker
+make beat
+```
 
 5. Отправить боту сообщение:
 
