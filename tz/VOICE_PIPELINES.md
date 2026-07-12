@@ -220,18 +220,34 @@ Parser обязан отправлять в YandexGPT:
 - пользовательский текст;
 - JSON Schema ответа.
 
-System prompt должен требовать:
+Разбор полной задачи выполняется в два шага:
+
+```text
+transcript
+  -> TaskSemanticParser: title, description, date_hint, repeat fields
+  -> YandexGPTDateParser.parse_date(date_hint), если date_hint != null
+  -> ParsedTaskInput
+```
+
+Task system prompt должен требовать:
 
 - извлечь одну задачу из русского текста;
 - вернуть только JSON без Markdown и пояснений;
 - не придумывать отсутствующие факты;
-- возвращать `null` для отсутствующих даты, описания и повторения;
-- интерпретировать относительные даты через переданное `now`;
+- возвращать `null` для отсутствующих `date_hint`, описания и повторения;
+- возвращать `date_hint` как дословную подстроку исходного текста;
+- не вычислять datetime на semantic-шаге;
 - отклонять текст, из которого нельзя получить название задачи.
+
+Если `date_hint` заполнен, он передаётся в тот же `YandexGPTDateParser`,
+который используется для Reply при назначении и переносе. Оба prompt-а
+получают одинаковый динамический календарь от текущего времени в
+`Europe/Moscow`. Если в `date_hint` назван день недели, итоговый weekday
+проверяется приложением.
 
 ## JSON Schema
 
-Ответ YandexGPT валидируется по схеме:
+Ответ semantic-шага валидируется по схеме:
 
 ```json
 {
@@ -246,13 +262,9 @@ System prompt должен требовать:
       "type": ["string", "null"],
       "description": "Детали и контекст из исходного текста, без выдуманных фактов"
     },
-    "due_to": {
+    "date_hint": {
       "type": ["string", "null"],
-      "description": "ISO 8601 datetime в Europe/Moscow, если дата или время указаны в тексте"
-    },
-    "due_to_has_time": {
-      "type": "boolean",
-      "description": "Было ли точное время явно указано пользователем"
+      "description": "Дословная подстрока с датой или временем из исходного текста"
     },
     "repeat_type": {
       "type": ["string", "null"],
@@ -265,7 +277,7 @@ System prompt должен требовать:
       "description": "Интервал повторения; null без повторения"
     }
   },
-  "required": ["title", "description", "due_to", "due_to_has_time", "repeat_type", "repeat_interval"],
+  "required": ["title", "description", "date_hint", "repeat_type", "repeat_interval"],
   "additionalProperties": false
 }
 ```
@@ -274,12 +286,15 @@ System prompt должен требовать:
 
 | Вход | JSON |
 | --- | --- |
-| `Отправить отчёт сегодня до 18, добавить цифры продаж` | `{"title":"Отправить отчёт","description":"Добавить цифры продаж","due_to":"2026-07-04T18:00:00+03:00","due_to_has_time":true,"repeat_type":null,"repeat_interval":null}` |
-| `В пятницу позвонить врачу` | `{"title":"Позвонить врачу","description":null,"due_to":"2026-07-10T00:00:00+03:00","due_to_has_time":false,"repeat_type":null,"repeat_interval":null}` |
-| `Купить корм для кота` | `{"title":"Купить корм для кота","description":null,"due_to":null,"due_to_has_time":false,"repeat_type":null,"repeat_interval":null}` |
-| `Каждый понедельник в 9 проверить финансы` | `{"title":"Проверить финансы","description":null,"due_to":"2026-07-06T09:00:00+03:00","due_to_has_time":true,"repeat_type":"weekly","repeat_interval":1}` |
+| `Отправить отчёт сегодня до 18, добавить цифры продаж` | `{"title":"Отправить отчёт","description":"Добавить цифры продаж","date_hint":"сегодня до 18","repeat_type":null,"repeat_interval":null}` |
+| `В пятницу позвонить врачу` | `{"title":"Позвонить врачу","description":null,"date_hint":"В пятницу","repeat_type":null,"repeat_interval":null}` |
+| `Купить корм для кота` | `{"title":"Купить корм для кота","description":null,"date_hint":null,"repeat_type":null,"repeat_interval":null}` |
+| `Каждый понедельник в 9 проверить финансы` | `{"title":"Проверить финансы","description":null,"date_hint":"Каждый понедельник в 9","repeat_type":"weekly","repeat_interval":1}` |
 
-Если API не вернул валидный JSON по схеме, задача не создаётся.
+Date-шаг возвращает `due_to` и `due_to_has_time` по отдельной схеме
+`DATE_GENERATION_JSON_SCHEMA`. Ошибки любого шага (`parser_failed`,
+`date_in_past`) пробрасываются без создания задачи. Если semantic API не
+вернул валидный JSON по схеме, задача не создаётся.
 
 ## Правила маппинга
 
