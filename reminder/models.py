@@ -93,6 +93,7 @@ class TaskEvent(models.Model):
         DATE_SET = "date_set", "Дата установлена"
         DELETED = "deleted", "Удалена"
         DIGEST_SENT = "digest_sent", "Дайджест отправлен"
+        DIGEST_CARD_SENT = "digest_card_sent", "Карточка из дайджеста отправлена"
 
     task = models.ForeignKey(
         Task,

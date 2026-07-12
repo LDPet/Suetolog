@@ -1,7 +1,25 @@
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from asgiref.sync import sync_to_async
+from django.db.models import TextChoices
 
 from errors import error_messages
+from reminder.models import Task, TaskEvent
+from reminder.repositories.task_event import TaskEventRepository
+
+
+class TaskCardVariant(TextChoices):
+    UNDATED = "undated", "Без даты"
+    REMINDER = "reminder", "Напоминание"
+    DIGEST = "digest", "На сегодня"
+    EVENING = "evening", "Не сделано"
+
+
+TASK_CARD_EVENT_TYPES = {
+    TaskCardVariant.UNDATED: TaskEvent.EventType.UNDATED_CARD_SENT,
+    TaskCardVariant.DIGEST: TaskEvent.EventType.DIGEST_CARD_SENT,
+    TaskCardVariant.EVENING: TaskEvent.EventType.EVENING_QUESTION_SENT,
+}
 
 
 class TelegramSender:
@@ -46,29 +64,42 @@ class TelegramSender:
     async def send_undated_list(self, chat_id, tasks):
         message_id = None
         for task in tasks:
-            task_id = task.pk
-            text = f"{task.title}"
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="📅 Назначить дату",
-                                     callback_data=f"assign_date:{task_id}"),
-                InlineKeyboardButton(text="🗑️ Удалить",
-                                     callback_data=f"delete:{task_id}")
-            ]])
-            message_id = await self.send_text_with_keyboard(
-                chat_id, text, keyboard)
+            message_id = await self._send_task_card_with_event(
+                chat_id, task, TaskCardVariant.UNDATED)
 
         return message_id
 
     async def send_reminder(self, chat_id, task):
-        text = f"Напоминание: {task.title}"
-        message_id = await self.send_text(chat_id, text)
-        return message_id
+        return await self.send_task_card(chat_id, task,
+                                         TaskCardVariant.REMINDER)
 
     async def send_evening_question(self, chat_id, task):
-        text = (f"Задача {task.title} не выполнена.\n"
-                f"Ответь на это сообщение: на какую дату и время перенести?")
-        message_id = await self.send_text(chat_id, text)
+        return await self._send_task_card_with_event(chat_id, task,
+                                                     TaskCardVariant.EVENING)
+
+    async def send_digest(self, chat_id, tasks):
+        message_id = None
+        for task in tasks:
+            message_id = await self._send_task_card_with_event(
+                chat_id, task, TaskCardVariant.DIGEST)
+
         return message_id
+
+    async def _send_task_card_with_event(self, chat_id, task, variant):
+        message_id = await self.send_task_card(chat_id, task, variant)
+        await self._create_task_card_event(
+            task=task,
+            message_id=message_id,
+            event_type=TASK_CARD_EVENT_TYPES[variant],
+        )
+        return message_id
+
+    async def _create_task_card_event(self, task, message_id, event_type):
+        await sync_to_async(TaskEventRepository.create, thread_sensitive=True)(
+            message_id=message_id,
+            task=task,
+            event_type=event_type,
+        )
 
     async def send_date_confirmed(self, chat_id, task):
         text = f"Дата назначена: {task.title} - {task.due_to}"
@@ -80,7 +111,54 @@ class TelegramSender:
         message_id = await self.send_text(chat_id, text)
         return message_id
 
+    async def send_task_completed(self, chat_id, task):
+        text = f"Задача «{task.title}» выполнена"
+        message_id = await self.send_text(chat_id, text)
+        return message_id
+
+    async def send_empty_digest(self, chat_id):
+        text = "На сегодня задач нет"
+        message_id = await self.send_text(chat_id, text)
+        return message_id
+
     async def send_empty_undated(self, chat_id):
         text = "Нет задач без даты"
         message_id = await self.send_text(chat_id, text)
+        return message_id
+
+    async def send_task_card(self, chat_id: int, task: Task,
+                             variant: TaskCardVariant):
+        title = task.title
+        task_id = task.pk
+        due_to = task.due_to
+        prompt = ("Ответь на это сообщение с датой и временем —\n"
+                  "назначить или изменить срок.")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Сделано",
+                                 callback_data=f"done:{task_id}"),
+            InlineKeyboardButton(text="🗑 Удалить",
+                                 callback_data=f"delete:{task_id}")
+        ]])
+
+        cards = {
+            TaskCardVariant.UNDATED:
+            f"📋 {title}\nБез даты",
+            TaskCardVariant.REMINDER:
+            (f"⏰ Напоминание:\n📋 {title}\n📅 {due_to}"),
+            TaskCardVariant.DIGEST: (f"🌅 На сегодня:\n📋 {title}\n📅 {due_to}"),
+            TaskCardVariant.EVENING:
+            (f"Задача «{title}» не выполнена.\n📅 {due_to}"),
+        }
+
+        try:
+            body = cards[variant]
+        except KeyError as exc:
+            raise ValueError(f"Unknown task card variant: {variant}") from exc
+
+        message_id = await self.send_text_with_keyboard(
+            chat_id,
+            f"{body}\n\n{prompt}",
+            keyboard,
+        )
+
         return message_id

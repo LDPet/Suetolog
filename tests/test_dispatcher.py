@@ -3,9 +3,10 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from reminder.bot import dispatcher
-from reminder.bot.dispatcher import (echo_message, handle_voice,
+from reminder.bot.dispatcher import (delete_callback, done_callback,
+                                     echo_message, handle_voice,
                                      set_dependencies, start_bot,
-                                     start_command)
+                                     start_command, undated_command)
 from reminder.services.dto import VoiceTaskResult
 from reminder.services.stt import STTConfigurationError
 
@@ -32,6 +33,8 @@ def mock_sender():
     sender.send_processing = AsyncMock()
     sender.send_task_created = AsyncMock()
     sender.send_error = AsyncMock()
+    sender.send_undated_list = AsyncMock()
+    sender.send_empty_undated = AsyncMock(return_value=123)
     return sender
 
 
@@ -48,6 +51,18 @@ def mock_voice_task_service():
     service.create_from_voice = AsyncMock(
         return_value=VoiceTaskResult.ok(Mock()))
     return service
+
+
+@pytest.fixture
+def mock_task_service():
+    service = Mock()
+    service.list_undated.return_value = []
+    return service
+
+
+@pytest.fixture
+def mock_reminder_service():
+    return Mock()
 
 
 def test_voice_handler_is_registered():
@@ -94,15 +109,20 @@ async def test_start_bot_validates_voice_service_before_polling(monkeypatch):
 class TestHandlers:
 
     @pytest.fixture(autouse=True)
-    def setup(self, mock_sender, mock_user_service, mock_voice_task_service):
+    def setup(self, mock_sender, mock_user_service, mock_voice_task_service,
+              mock_task_service, mock_reminder_service):
         set_dependencies(
             mock_sender=mock_sender,
             mock_user_service=mock_user_service,
             mock_voice_task_service=mock_voice_task_service,
+            mock_task_service=mock_task_service,
+            mock_reminder_service=mock_reminder_service,
         )
         self.sender = mock_sender
         self.user_service = mock_user_service
         self.voice_task_service = mock_voice_task_service
+        self.task_service = mock_task_service
+        self.reminder_service = mock_reminder_service
 
     @pytest.mark.asyncio
     async def test_start_command(self, mock_message):
@@ -120,6 +140,37 @@ class TestHandlers:
         await echo_message(mock_message)
         self.sender.send_text.assert_called_once_with(mock_message.chat.id,
                                                       "Hello!\n\n")
+
+    @pytest.mark.asyncio
+    async def test_undated_command(self, mock_message):
+        await undated_command(mock_message)
+
+        self.task_service.list_undated.assert_called_once_with(
+            self.user_service.get_or_create_user.return_value)
+        self.sender.send_empty_undated.assert_awaited_once_with(
+            mock_message.chat.id)
+
+    @pytest.mark.asyncio
+    async def test_delete_callback_uses_injected_services(self, monkeypatch):
+        callback = Mock()
+        handler = AsyncMock()
+        monkeypatch.setattr(dispatcher, "delete_task_callback", handler)
+
+        await delete_callback(callback)
+
+        handler.assert_awaited_once_with(callback, self.task_service,
+                                         self.sender)
+
+    @pytest.mark.asyncio
+    async def test_done_callback_uses_injected_services(self, monkeypatch):
+        callback = Mock()
+        handler = AsyncMock()
+        monkeypatch.setattr(dispatcher, "complete_task_callback", handler)
+
+        await done_callback(callback)
+
+        handler.assert_awaited_once_with(callback, self.task_service,
+                                         self.sender, self.reminder_service)
 
     @pytest.mark.asyncio
     async def test_handle_voice_success(self, mock_message):
