@@ -3,6 +3,7 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 
+from celery.schedules import crontab
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -103,6 +104,7 @@ AUTH_PASSWORD_VALIDATORS = [
 LANGUAGE_CODE = "ru-ru"
 TIME_ZONE = "Europe/Moscow"
 DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE", TIME_ZONE)
+MORNING_DIGEST_HOUR = 9
 USE_I18N = True
 USE_TZ = True
 
@@ -161,5 +163,9 @@ CELERY_BEAT_SCHEDULE = {
     "send-due-reminders": {
         "task": "reminder.tasks.send_due_reminders",
         "schedule": timedelta(minutes=REMINDER_CHECK_INTERVAL_MINUTES),
+    },
+    "send-morning-digest": {
+        "task": "reminder.tasks.send_morning_digest",
+        "schedule": crontab(minute=0, hour=MORNING_DIGEST_HOUR),
     },
 }

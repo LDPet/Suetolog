@@ -54,6 +54,9 @@ class TaskService:
     def list_for_day(self, user: User, date: Date) -> list[Task]:
         return TaskRepository.list_for_day(user, date)
 
+    def list_active_for_day(self, day: Date) -> list[Task]:
+        return TaskRepository.list_active_for_day(day)
+
     @transaction.atomic
     def set_due_date(self,
                      user: User,

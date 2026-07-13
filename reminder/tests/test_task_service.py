@@ -231,6 +231,29 @@ def test_list_for_day_returns_only_users_active_tasks(service, user,
     assert service.list_for_day(user, date=target_day) == [expected]
 
 
+def test_list_active_for_day_returns_all_users_active_tasks(
+        service, user, other_user):
+    target_day = timezone.localdate()
+    target_due = timezone.make_aware(
+        datetime.combine(target_day, time(hour=10)),
+        timezone.get_current_timezone(),
+    )
+    first = Task.objects.create(user=user, title="Моя", due_to=target_due)
+    second = Task.objects.create(user=other_user,
+                                 title="Чужая active",
+                                 due_to=target_due + timedelta(hours=1))
+    Task.objects.create(user=user,
+                        title="Другой день",
+                        due_to=target_due + timedelta(days=1))
+    Task.objects.create(user=user,
+                        title="Завершена",
+                        due_to=target_due,
+                        status=Task.Status.DONE)
+    Task.objects.create(user=user, title="Без даты", due_to=None)
+
+    assert service.list_active_for_day(target_day) == [first, second]
+
+
 def test_set_due_date_creates_reminder_and_date_set_event(service, user, task):
     due_to = future_at()
 

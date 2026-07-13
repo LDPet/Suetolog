@@ -189,7 +189,7 @@ class TestTaskCards:
         mock_create = mocker.patch(
             "reminder.bot.sender.TaskEventRepository.create")
 
-        message_id = await sender.send_digest(456, [task])
+        message_id = await sender.send_digest(456, task)
 
         due_text = format_task_due_to(task)
         text = mock_bot.send_message.call_args.kwargs["text"]
