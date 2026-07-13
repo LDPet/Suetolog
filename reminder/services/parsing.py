@@ -60,19 +60,21 @@ TASK_SEMANTIC_JSON_SCHEMA = {
         },
         "date_hint": {
             "type": ["string", "null"],
-            "description":
-            ("Дословная подстрока с датой или временем из исходного "
-             "текста либо null"),
+            "description": ("Фраза с датой или временем из исходного текста; "
+                            "допускается нормализация формата, либо null"),
         },
         "repeat_type": {
             "type": ["string", "null"],
-            "enum": ["daily", "weekly", "monthly", None],
+            "enum": ["minutely", "hourly", "daily", "weekly", "monthly", None],
             "description": "Тип явно указанного повторения",
         },
         "repeat_interval": {
             "type": ["integer", "null"],
-            "minimum": 1,
-            "description": "Интервал повторения или null",
+            "minimum":
+            1,
+            "description":
+            ("Число единиц repeat_type между повторами, например 2 для "
+             "«каждые две минуты»; иначе null"),
         },
     },
     "required": [
@@ -940,13 +942,6 @@ class YandexGPTTaskParser(_YandexGPTParserBase):
         if date_hint is not None:
             date_hint = date_hint.strip() or None
 
-        if date_hint is not None and date_hint.casefold() not in text.casefold(
-        ):
-            raise ParserError(
-                ParserErrorCode.PARSER_FAILED,
-                "YandexGPT returned a date_hint outside the transcript.",
-            )
-
         due_to = None
         due_to_has_time = False
         if date_hint is not None:
@@ -1010,14 +1005,17 @@ class YandexGPTTaskParser(_YandexGPTParserBase):
 - title — короткое главное действие. Не добавляй факты, которых нет в тексте.
 - Служебные слова «напомни» и «напомнить» не являются действием. Если кроме них и даты нет действия, верни title="", description=null, date_hint с датой и repeat-поля null.
 - description — только отдельные явно сказанные детали, иначе null; не повторяй в нём title.
-- date_hint — одна дословная непрерывная подстрока исходного текста с полной фразой даты/времени; не исправляй падеж, порядок слов и числа.
+- date_hint — фраза даты/времени из исходного текста; можно нормализовать формат (например «в 21 51 сегодня» → «сегодня в 21:51»), но не выдумывай дату, которой нет в тексте.
 - Не вычисляй datetime и не возвращай due_to. Если даты или времени нет, date_hint=null.
 - Для «в следующую среду» date_hint="в следующую среду"; для «в среду через 2 недели» date_hint="в среду через 2 недели".
 - Одна дата («в пятницу», «во вторник») означает разовую задачу, а не повторение.
-- Повторение возвращай только при явных словах «каждый», «еженедельно», «по пятницам»; иначе оба repeat-поля null.
+- Повторение возвращай только при явных словах «каждый», «каждую», «каждые», «еженедельно», «по пятницам»; иначе оба repeat-поля null.
 - Предлог «в» или «во» перед единственным днём недели никогда не означает повтор: «во вторник» даёт repeat_type=null и repeat_interval=null.
-- repeat_type и repeat_interval всегда заполняй вместе: для обычного еженедельного повтора укажи "weekly" и 1.
-- Для повторения date_hint всё равно содержит дословную фразу первого срока, например «каждый понедельник в 9».
+- repeat_type и repeat_interval всегда заполняй вместе.
+- Для минутного повтора: «каждую минуту» → repeat_type="minutely", repeat_interval=1; «каждые две минуты» / «каждые 2 минуты» → "minutely" и 2.
+- Для часового повтора: «каждый час» → "hourly" и 1; «каждые 3 часа» → "hourly" и 3.
+- Для обычного еженедельного повтора укажи "weekly" и 1.
+- Для повторения date_hint всё равно содержит фразу первого срока или цикла, например «каждый понедельник в 9» или «каждые две минуты».
 - Если текст не является задачей или название определить нельзя, верни title="", description=null, date_hint=null и repeat-поля null.
 - Фраза «сделать то же что вчера» не содержит самостоятельного действия: верни title="" и date_hint=null. Но в «напомни вчера позвонить врачу» слово «вчера» является сроком: верни title="Позвонить врачу" и date_hint="вчера".
 
@@ -1031,6 +1029,10 @@ JSON Schema:
 {{"title":"Купить корм для кота","description":null,"date_hint":null,"repeat_type":null,"repeat_interval":null}}
 Текст "Каждый понедельник в 9 проверить финансы":
 {{"title":"Проверить финансы","description":null,"date_hint":"Каждый понедельник в 9","repeat_type":"weekly","repeat_interval":1}}
+Текст "Каждые две минуты помыть полы":
+{{"title":"Помыть полы","description":null,"date_hint":"Каждые две минуты","repeat_type":"minutely","repeat_interval":2}}
+Текст "Каждую минуту проверить статус":
+{{"title":"Проверить статус","description":null,"date_hint":"Каждую минуту","repeat_type":"minutely","repeat_interval":1}}
 Текст "В пятницу позвонить врачу":
 {{"title":"Позвонить врачу","description":null,"date_hint":"В пятницу","repeat_type":null,"repeat_interval":null}}
 Текст "Во вторник почесать яйца":
@@ -1086,7 +1088,14 @@ JSON Schema:
                 payload["date_hint"], str):
             return False
 
-        if payload["repeat_type"] not in ("daily", "weekly", "monthly", None):
+        if payload["repeat_type"] not in (
+                "minutely",
+                "hourly",
+                "daily",
+                "weekly",
+                "monthly",
+                None,
+        ):
             return False
 
         repeat_interval = payload["repeat_interval"]

@@ -1,4 +1,5 @@
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
@@ -6,6 +7,7 @@ import pytest
 from asgiref.sync import sync_to_async
 
 from errors import ErrorCode, error_messages
+from reminder.bot.formatting import format_task_due_to, format_task_identity
 from reminder.bot.sender import TaskCardVariant
 from reminder.models import Task, TaskEvent, User
 
@@ -18,7 +20,9 @@ def task():
     return Task(
         pk=1,
         title="Купить молоко",
+        description="",
         due_to=datetime(2026, 7, 15, 10, 0, tzinfo=ZoneInfo("Europe/Moscow")),
+        due_to_has_time=True,
     )
 
 
@@ -45,6 +49,52 @@ class TestTelegramSender:
             chat_id=123456,
             text="Hello, World!\n\n",
         )
+
+    @pytest.mark.asyncio
+    async def test_send_date_confirmed_for_new_date(self, sender, mock_bot,
+                                                    task):
+        await sender.send_date_confirmed(456, task)
+
+        mock_bot.send_message.assert_called_once_with(
+            chat_id=456,
+            text=("Дата назначена\n"
+                  "📋 Название: Купить молоко\n"
+                  "📝 Описание: не указано\n"
+                  "📅 Срок: 15 июля 2026, 10:00\n\n"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_send_date_confirmed_for_reschedule(self, sender, mock_bot,
+                                                      task):
+        await sender.send_date_confirmed(456, task, rescheduled=True)
+
+        mock_bot.send_message.assert_called_once_with(
+            chat_id=456,
+            text=("Дата перенесена\n"
+                  "📋 Название: Купить молоко\n"
+                  "📝 Описание: не указано\n"
+                  "📅 Срок: 15 июля 2026, 10:00\n\n"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_send_task_created_shows_parsed_fields(
+            self, sender, mock_bot, task):
+        due_to = task.due_to
+        task.description = "2 литра"
+        task.due_to_has_time = True
+        task.repeat_type = None
+        reminders = [SimpleNamespace(reminder_time=due_to)]
+
+        await sender.send_task_created(456, task, reminders)
+
+        mock_bot.send_message.assert_called_once()
+        text = mock_bot.send_message.call_args.kwargs["text"]
+        assert "✅ Задача создана" in text
+        assert "📋 Название: Купить молоко" in text
+        assert "📝 Описание: 2 литра" in text
+        assert "15 июля 2026, 10:00 (точное время)" in text
+        assert "⏰ Напоминания:" in text
+        assert "ожидает отправки" in text
 
     @pytest.mark.parametrize("error_code", [
         ErrorCode.VOICE_TOO_LONG,
@@ -89,7 +139,8 @@ class TestTaskCards:
 
         mock_bot.send_message.assert_awaited_once_with(
             chat_id=456,
-            text=f"📋 Купить молоко\nБез даты\n\n{CARD_FOOTER}\n\n",
+            text=(f"{format_task_identity(task)}\n"
+                  f"Без даты\n\n{CARD_FOOTER}\n\n"),
             reply_markup=mock_bot.send_message.call_args.
             kwargs["reply_markup"],
         )
@@ -109,13 +160,28 @@ class TestTaskCards:
 
         message_id = await sender.send_reminder(456, task)
 
+        due_text = format_task_due_to(task)
         text = mock_bot.send_message.call_args.kwargs["text"]
-        assert text == ("⏰ Напоминание:\n"
-                        "📋 Купить молоко\n"
-                        f"📅 {task.due_to}\n\n{CARD_FOOTER}\n\n")
+        assert text == (f"⏰ Напоминание:\n"
+                        f"{format_task_identity(task)}\n"
+                        f"📅 {due_text}\n\n{CARD_FOOTER}\n\n")
         assert_keyboard(mock_bot, task.pk)
         mock_create.assert_not_called()
         assert message_id == 124
+
+    @pytest.mark.asyncio
+    async def test_reminder_card_with_description(self, sender, mock_bot,
+                                                  mocker, task):
+        task.description = "с моющим средством"
+        set_message_id(mock_bot, 128)
+        mocker.patch("reminder.bot.sender.TaskEventRepository.create")
+
+        await sender.send_reminder(456, task)
+
+        text = mock_bot.send_message.call_args.kwargs["text"]
+        assert "📋 Название: Купить молоко" in text
+        assert "📝 Описание: с моющим средством" in text
+        assert "📅" in text
 
     @pytest.mark.asyncio
     async def test_digest_card(self, sender, mock_bot, mocker, task):
@@ -125,10 +191,11 @@ class TestTaskCards:
 
         message_id = await sender.send_digest(456, [task])
 
+        due_text = format_task_due_to(task)
         text = mock_bot.send_message.call_args.kwargs["text"]
-        assert text == ("🌅 На сегодня:\n"
-                        "📋 Купить молоко\n"
-                        f"📅 {task.due_to}\n\n{CARD_FOOTER}\n\n")
+        assert text == (f"🌅 На сегодня:\n"
+                        f"{format_task_identity(task)}\n"
+                        f"📅 {due_text}\n\n{CARD_FOOTER}\n\n")
         assert_keyboard(mock_bot, task.pk)
         mock_create.assert_called_once_with(
             message_id=125,
@@ -145,9 +212,11 @@ class TestTaskCards:
 
         message_id = await sender.send_evening_question(456, task)
 
+        due_text = format_task_due_to(task)
         text = mock_bot.send_message.call_args.kwargs["text"]
-        assert text == ("Задача «Купить молоко» не выполнена.\n"
-                        f"📅 {task.due_to}\n\n{CARD_FOOTER}\n\n")
+        assert text == (f"Задача не выполнена.\n"
+                        f"{format_task_identity(task)}\n"
+                        f"📅 {due_text}\n\n{CARD_FOOTER}\n\n")
         assert_keyboard(mock_bot, task.pk)
         mock_create.assert_called_once_with(
             message_id=126,

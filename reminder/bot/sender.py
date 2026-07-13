@@ -4,7 +4,9 @@ from asgiref.sync import sync_to_async
 from django.db.models import TextChoices
 
 from errors import error_messages
-from reminder.models import Task, TaskEvent
+from reminder.bot.formatting import (format_task_created_message,
+                                     format_task_due_to, format_task_identity)
+from reminder.models import Reminder, Task, TaskEvent
 from reminder.repositories.task_event import TaskEventRepository
 
 
@@ -52,8 +54,11 @@ class TelegramSender:
         message_id = await self.send_text(chat_id, text)
         return message_id
 
-    async def send_task_created(self, chat_id, task):
-        text = f"Задача создана: {task.title}"
+    async def send_task_created(self,
+                                chat_id,
+                                task,
+                                reminders: list[Reminder] | None = None):
+        text = format_task_created_message(task, reminders)
         message_id = await self.send_text(chat_id, text)
         return message_id
 
@@ -101,18 +106,26 @@ class TelegramSender:
             event_type=event_type,
         )
 
-    async def send_date_confirmed(self, chat_id, task):
-        text = f"Дата назначена: {task.title} - {task.due_to}"
+    async def send_date_confirmed(self,
+                                  chat_id,
+                                  task,
+                                  *,
+                                  rescheduled: bool = False):
+        due_text = format_task_due_to(task)
+        action = "Дата перенесена" if rescheduled else "Дата назначена"
+        text = (f"{action}\n"
+                f"{format_task_identity(task)}\n"
+                f"📅 Срок: {due_text}")
         message_id = await self.send_text(chat_id, text)
         return message_id
 
     async def send_deleted(self, chat_id, task):
-        text = f"Задача {task.title} удалена"
+        text = f"Задача удалена\n{format_task_identity(task)}"
         message_id = await self.send_text(chat_id, text)
         return message_id
 
     async def send_task_completed(self, chat_id, task):
-        text = f"Задача «{task.title}» выполнена"
+        text = f"Задача выполнена\n{format_task_identity(task)}"
         message_id = await self.send_text(chat_id, text)
         return message_id
 
@@ -128,9 +141,9 @@ class TelegramSender:
 
     async def send_task_card(self, chat_id: int, task: Task,
                              variant: TaskCardVariant):
-        title = task.title
+        identity = format_task_identity(task)
         task_id = task.pk
-        due_to = task.due_to
+        due_text = format_task_due_to(task)
         prompt = ("Ответь на это сообщение с датой и временем —\n"
                   "назначить или изменить срок.")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
@@ -142,12 +155,13 @@ class TelegramSender:
 
         cards = {
             TaskCardVariant.UNDATED:
-            f"📋 {title}\nБез даты",
+            f"{identity}\nБез даты",
             TaskCardVariant.REMINDER:
-            (f"⏰ Напоминание:\n📋 {title}\n📅 {due_to}"),
-            TaskCardVariant.DIGEST: (f"🌅 На сегодня:\n📋 {title}\n📅 {due_to}"),
+            (f"⏰ Напоминание:\n{identity}\n📅 {due_text}"),
+            TaskCardVariant.DIGEST:
+            (f"🌅 На сегодня:\n{identity}\n📅 {due_text}"),
             TaskCardVariant.EVENING:
-            (f"Задача «{title}» не выполнена.\n📅 {due_to}"),
+            (f"Задача не выполнена.\n{identity}\n📅 {due_text}"),
         }
 
         try:

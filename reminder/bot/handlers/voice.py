@@ -5,6 +5,7 @@ from asgiref.sync import sync_to_async
 
 from errors import ErrorCode
 from reminder.bot.sender import TelegramSender
+from reminder.repositories.reminders import ReminderRepository
 from reminder.services.users import UserService
 from reminder.services.voice_tasks import VoiceTaskCreationService
 
@@ -43,7 +44,11 @@ async def handle_voice(message: Message, user_service: UserService,
                 chat_id,
                 result.task.pk,
             )
-            await sender.send_task_created(chat_id, result.task)
+            reminders = await sync_to_async(
+                ReminderRepository.list_pending_for_task,
+                thread_sensitive=True,
+            )(result.task)
+            await sender.send_task_created(chat_id, result.task, reminders)
         else:
             logger.warning(
                 "Voice handler: ошибка пайплайна | chat_id=%s | error=%s",

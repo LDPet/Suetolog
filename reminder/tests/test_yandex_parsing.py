@@ -161,10 +161,14 @@ def test_yandex_parser_prompt_contains_semantic_schema_and_calendar():
     assert "Сделать то же что вчера" in system_prompt
     assert '"date_hint":"сегодня до 18"' in system_prompt
     assert '"date_hint":"В пятницу"' in system_prompt
+    assert '"repeat_type":"minutely"' in system_prompt
+    assert "Каждые две минуты помыть полы" in system_prompt
     assert user_text == "Купить корм"
     assert schema == YANDEX_GENERATION_JSON_SCHEMA
     assert "date_hint" in schema["properties"]
     assert "due_to" not in schema["properties"]
+    assert "minutely" in schema["properties"]["repeat_type"]["enum"]
+    assert "hourly" in schema["properties"]["repeat_type"]["enum"]
 
 
 @pytest.mark.parametrize(
@@ -307,16 +311,27 @@ def test_yandex_parser_rejects_inconsistent_explicit_repeat():
     assert exc_info.value.code == ParserErrorCode.PARSER_FAILED
 
 
-def test_yandex_parser_rejects_invented_date_hint():
-    response = task_response(title="Купить корм", date_hint="завтра")
+def test_yandex_parser_accepts_normalized_date_hint():
+    client = StubClient([
+        task_response(
+            title="Собирать конструктор",
+            date_hint="сегодня в 21:51",
+            repeat_type="minutely",
+            repeat_interval=3,
+        ),
+        date_response("2026-07-04T21:51:00+03:00", True),
+    ])
 
-    with pytest.raises(ParserError) as exc_info:
-        YandexGPTTaskParser(client=StubClient(response)).parse_task(
-            "Купить корм",
-            now=NOW,
-        )
+    parsed = YandexGPTTaskParser(client=client).parse_task(
+        "Собирать конструктор в 21 51 сегодня повторять каждые 3 минуты",
+        now=NOW,
+    )
 
-    assert exc_info.value.code == ParserErrorCode.PARSER_FAILED
+    assert parsed.title == "Собирать конструктор"
+    assert parsed.due_to == datetime(2026, 7, 4, 21, 51, tzinfo=MSK)
+    assert parsed.due_to_has_time is True
+    assert parsed.repeat_type == "minutely"
+    assert parsed.repeat_interval == 3
 
 
 def test_yandex_parser_rejects_empty_transcript_without_api_call():

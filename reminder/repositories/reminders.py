@@ -43,6 +43,14 @@ class ReminderRepository:
         return reminder
 
     @staticmethod
+    def list_pending_for_task(task) -> list[Reminder]:
+        return list(
+            Reminder.objects.filter(
+                task=task,
+                sent_time__isnull=True,
+            ).order_by("reminder_time"))
+
+    @staticmethod
     def replace_pending_for_task(
             task, reminder_time: datetime | None) -> Reminder | None:
         Reminder.objects.filter(task=task, sent_time__isnull=True).delete()

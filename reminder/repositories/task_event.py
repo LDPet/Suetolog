@@ -14,7 +14,8 @@ class TaskEventRepository:
     @staticmethod
     def find_by_message_id(message_id: int) -> TaskEvent | None:
         try:
-            return TaskEvent.objects.get(message_id=message_id)
+            return TaskEvent.objects.select_related("task").get(
+                message_id=message_id)
         except TaskEvent.DoesNotExist:
             return None
 
