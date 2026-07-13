@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -40,9 +40,13 @@ def voice_task_service():
 
 
 @pytest.mark.asyncio
-async def test_voice_handler_sends_created_task(message, user_service, sender,
+@patch("reminder.bot.handlers.voice.ReminderRepository.list_pending_for_task")
+async def test_voice_handler_sends_created_task(list_pending_mock, message,
+                                                user_service, sender,
                                                 voice_task_service):
     task = Mock()
+    reminders = [Mock()]
+    list_pending_mock.return_value = reminders
     voice_task_service.create_from_voice.return_value = VoiceTaskResult.ok(
         task)
 
@@ -56,16 +60,20 @@ async def test_voice_handler_sends_created_task(message, user_service, sender,
     sender.send_processing.assert_awaited_once_with(message.chat.id)
     voice_task_service.create_from_voice.assert_awaited_once_with(
         user, message.voice)
-    sender.send_task_created.assert_awaited_once_with(message.chat.id, task)
+    list_pending_mock.assert_called_once_with(task)
+    sender.send_task_created.assert_awaited_once_with(message.chat.id, task,
+                                                      reminders)
     sender.send_error.assert_not_awaited()
 
 
 @pytest.mark.asyncio
+@patch("reminder.bot.handlers.voice.ReminderRepository.list_pending_for_task")
 async def test_voice_handler_calls_dependencies_in_order(
-        message, user_service, sender, voice_task_service):
+        list_pending_mock, message, user_service, sender, voice_task_service):
     calls = []
     user = Mock()
     task = Mock()
+    list_pending_mock.return_value = []
 
     def get_user(**_kwargs):
         calls.append("user")
@@ -78,7 +86,7 @@ async def test_voice_handler_calls_dependencies_in_order(
         lambda _user, _voice: calls.append("create") or VoiceTaskResult.ok(task
                                                                            ))
     sender.send_task_created.side_effect = (
-        lambda _chat_id, _task: calls.append("created"))
+        lambda _chat_id, _task, _reminders: calls.append("created"))
 
     await handle_voice(message, user_service, sender, voice_task_service)
 

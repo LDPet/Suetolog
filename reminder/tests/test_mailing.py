@@ -6,6 +6,7 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 
+from reminder.bot.formatting import format_task_due_to
 from reminder.bot.sender import TelegramSender
 from reminder.models import Reminder, TaskEvent
 from reminder.services.mailing import ReminderMailingService
@@ -61,7 +62,9 @@ async def test_due_reminder_uses_task_card_and_creates_one_event(task, user):
     now = timezone.now()
     due_to = now - timedelta(minutes=1)
     task.due_to = due_to
-    await db_call(lambda: task.save(update_fields=["due_to"]))
+    task.due_to_has_time = True
+    await db_call(
+        lambda: task.save(update_fields=["due_to", "due_to_has_time"]))
     reminder = await db_call(lambda: Reminder.objects.create(
         task=task,
         reminder_time=due_to,
@@ -84,7 +87,7 @@ async def test_due_reminder_uses_task_card_and_creates_one_event(task, user):
     assert result["sent"] == 1
     assert send_call["chat_id"] == user.chat_id
     assert task.title in send_call["text"]
-    assert str(due_to) in send_call["text"]
+    assert format_task_due_to(task) in send_call["text"]
     assert "Ответь на это сообщение с датой и временем" in send_call["text"]
     assert buttons[0].callback_data == f"done:{task.id}"
     assert buttons[1].callback_data == f"delete:{task.id}"

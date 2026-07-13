@@ -20,6 +20,7 @@ class Task(models.Model):
         DELETED = "deleted", "Удалена"
 
     class RepeatType(models.TextChoices):
+        MINUTELY = "minutely", "Каждую минуту"
         HOURLY = "hourly", "Каждый час"
         DAILY = "daily", "Ежедневно"
         WEEKLY = "weekly", "Еженедельно"

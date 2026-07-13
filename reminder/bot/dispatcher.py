@@ -11,10 +11,12 @@ from errors import ErrorCode
 from reminder.bot.handlers.callbacks import (callback_startswith,
                                              complete_task_callback,
                                              delete_task_callback)
+from reminder.bot.handlers.date_reply import NO_REPLY_TEXT, handle_date_reply
 from reminder.bot.handlers.start import handle_start
 from reminder.bot.handlers.undated import handle_undated
 from reminder.bot.handlers.voice import handle_voice as handle_voice_message
 from reminder.bot.telegram_files import TelegramFileDownloader
+from reminder.services.parsing import YandexGPTDateParser
 from reminder.services.reminders import ReminderService
 from reminder.services.stt import YandexSpeechKitSTTService
 from reminder.services.tasks import TaskService
@@ -37,6 +39,7 @@ downloader = TelegramFileDownloader(bot)
 user_service = UserService()
 reminder_service = ReminderService()
 voice_task_service = None
+date_parser = None
 task_service = TaskService()
 
 
@@ -45,9 +48,10 @@ def set_dependencies(mock_sender=None,
                      mock_user_service=None,
                      mock_voice_task_service=None,
                      mock_task_service=None,
-                     mock_reminder_service=None):
+                     mock_reminder_service=None,
+                     mock_date_parser=None):
     global sender, downloader, user_service, voice_task_service
-    global task_service, reminder_service
+    global task_service, reminder_service, date_parser
     if mock_sender is not None:
         sender = mock_sender
     if mock_downloader is not None:
@@ -60,6 +64,8 @@ def set_dependencies(mock_sender=None,
         task_service = mock_task_service
     if mock_reminder_service is not None:
         reminder_service = mock_reminder_service
+    if mock_date_parser is not None:
+        date_parser = mock_date_parser
 
 
 def get_voice_task_service():
@@ -73,6 +79,20 @@ def get_voice_task_service():
     return voice_task_service
 
 
+def get_date_parser():
+    global date_parser
+    if date_parser is None:
+        date_parser = YandexGPTDateParser()
+    return date_parser
+
+
+def is_date_reply_message(message: Message) -> bool:
+    return (message.content_type == ContentType.TEXT
+            and message.reply_to_message is not None
+            and isinstance(message.text, str)
+            and not message.text.lstrip().startswith("/"))
+
+
 @dp.message(Command("start"))
 async def start_command(message: Message):
     await handle_start(message, user_service, sender)
@@ -81,6 +101,22 @@ async def start_command(message: Message):
 @dp.message(Command("undated"))
 async def undated_command(message: Message):
     await handle_undated(message, user_service, task_service, sender)
+
+
+@dp.message(is_date_reply_message)
+async def date_reply_message(message: Message):
+    try:
+        parser = get_date_parser()
+    except Exception:
+        logger.exception(
+            "Failed to initialize date parser | chat_id=%s",
+            message.chat.id,
+        )
+        await sender.send_error(message.chat.id, ErrorCode.GENERIC)
+        return
+
+    await handle_date_reply(message, user_service, task_service, parser,
+                            sender)
 
 
 @dp.message(lambda message: message.content_type == ContentType.TEXT)
@@ -100,7 +136,11 @@ async def echo_message(message: Message):
         await handle_undated(message, user_service, task_service, sender)
         return
 
-    await sender.send_text(chat_id, f"{message.text}\n\n")
+    if text.lstrip().startswith("/"):
+        await sender.send_text(chat_id, f"{message.text}\n\n")
+        return
+
+    await sender.send_text(chat_id, NO_REPLY_TEXT)
 
 
 @dp.message(lambda message: message.content_type == ContentType.VOICE)

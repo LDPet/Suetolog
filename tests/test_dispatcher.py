@@ -1,12 +1,15 @@
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from aiogram.enums import ContentType
 
 from reminder.bot import dispatcher
-from reminder.bot.dispatcher import (delete_callback, done_callback,
-                                     echo_message, handle_voice,
-                                     set_dependencies, start_bot,
-                                     start_command, undated_command)
+from reminder.bot.dispatcher import (date_reply_message, delete_callback,
+                                     done_callback, echo_message,
+                                     get_date_parser, handle_voice,
+                                     is_date_reply_message, set_dependencies,
+                                     start_bot, start_command, undated_command)
+from reminder.bot.handlers.date_reply import NO_REPLY_TEXT
 from reminder.services.dto import VoiceTaskResult
 from reminder.services.stt import STTConfigurationError
 
@@ -17,6 +20,8 @@ def mock_message():
     message.from_user.id = 123
     message.chat.id = 456
     message.message_id = 789
+    message.content_type = ContentType.TEXT
+    message.reply_to_message = None
     message.voice = Mock()
     message.voice.file_id = "test_file_id"
     message.voice.file_size = 1000
@@ -35,6 +40,7 @@ def mock_sender():
     sender.send_error = AsyncMock()
     sender.send_undated_list = AsyncMock()
     sender.send_empty_undated = AsyncMock(return_value=123)
+    sender.send_date_confirmed = AsyncMock()
     return sender
 
 
@@ -65,9 +71,40 @@ def mock_reminder_service():
     return Mock()
 
 
+@pytest.fixture
+def mock_date_parser():
+    return Mock()
+
+
 def test_voice_handler_is_registered():
     assert any(handler.callback is handle_voice
                for handler in dispatcher.dp.message.handlers)
+
+
+def test_date_reply_handler_is_registered_before_generic_text_handler():
+    callbacks = [
+        handler.callback for handler in dispatcher.dp.message.handlers
+    ]
+
+    assert date_reply_message in callbacks
+    assert callbacks.index(date_reply_message) < callbacks.index(echo_message)
+
+
+def test_date_reply_filter_accepts_only_non_command_text_replies(mock_message):
+    mock_message.reply_to_message = Mock()
+
+    assert is_date_reply_message(mock_message) is True
+
+    mock_message.text = "/start"
+    assert is_date_reply_message(mock_message) is False
+
+    mock_message.text = "завтра"
+    mock_message.content_type = ContentType.VOICE
+    assert is_date_reply_message(mock_message) is False
+
+    mock_message.content_type = ContentType.TEXT
+    mock_message.reply_to_message = None
+    assert is_date_reply_message(mock_message) is False
 
 
 def test_voice_service_uses_dispatcher_dependencies(monkeypatch):
@@ -90,6 +127,18 @@ def test_voice_service_uses_dispatcher_dependencies(monkeypatch):
     )
 
 
+def test_date_parser_is_created_lazily(monkeypatch):
+    parser = Mock()
+    factory = Mock(return_value=parser)
+    monkeypatch.setattr(dispatcher, "date_parser", None)
+    monkeypatch.setattr(dispatcher, "YandexGPTDateParser", factory)
+
+    result = get_date_parser()
+
+    assert result is parser
+    factory.assert_called_once_with()
+
+
 @pytest.mark.asyncio
 async def test_start_bot_validates_voice_service_before_polling(monkeypatch):
     configuration_error = STTConfigurationError("missing credentials")
@@ -110,19 +159,21 @@ class TestHandlers:
 
     @pytest.fixture(autouse=True)
     def setup(self, mock_sender, mock_user_service, mock_voice_task_service,
-              mock_task_service, mock_reminder_service):
+              mock_task_service, mock_reminder_service, mock_date_parser):
         set_dependencies(
             mock_sender=mock_sender,
             mock_user_service=mock_user_service,
             mock_voice_task_service=mock_voice_task_service,
             mock_task_service=mock_task_service,
             mock_reminder_service=mock_reminder_service,
+            mock_date_parser=mock_date_parser,
         )
         self.sender = mock_sender
         self.user_service = mock_user_service
         self.voice_task_service = mock_voice_task_service
         self.task_service = mock_task_service
         self.reminder_service = mock_reminder_service
+        self.date_parser = mock_date_parser
 
     @pytest.mark.asyncio
     async def test_start_command(self, mock_message):
@@ -138,8 +189,26 @@ class TestHandlers:
     async def test_echo_message(self, mock_message):
         mock_message.text = "Hello!"
         await echo_message(mock_message)
-        self.sender.send_text.assert_called_once_with(mock_message.chat.id,
-                                                      "Hello!\n\n")
+        self.sender.send_text.assert_awaited_once_with(mock_message.chat.id,
+                                                       NO_REPLY_TEXT)
+        self.date_parser.parse_date.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_date_reply_uses_injected_services(self, mock_message,
+                                                     monkeypatch):
+        mock_message.reply_to_message = Mock(message_id=321)
+        handler = AsyncMock()
+        monkeypatch.setattr(dispatcher, "handle_date_reply", handler)
+
+        await date_reply_message(mock_message)
+
+        handler.assert_awaited_once_with(
+            mock_message,
+            self.user_service,
+            self.task_service,
+            self.date_parser,
+            self.sender,
+        )
 
     @pytest.mark.asyncio
     async def test_undated_command(self, mock_message):
@@ -173,7 +242,14 @@ class TestHandlers:
                                          self.sender, self.reminder_service)
 
     @pytest.mark.asyncio
-    async def test_handle_voice_success(self, mock_message):
+    async def test_handle_voice_success(self, mock_message, monkeypatch):
+        reminders = []
+        monkeypatch.setattr(
+            "reminder.bot.handlers.voice.ReminderRepository."
+            "list_pending_for_task",
+            lambda task: reminders,
+        )
+
         await handle_voice(mock_message)
 
         user = self.user_service.get_or_create_user.return_value
@@ -187,4 +263,4 @@ class TestHandlers:
         self.voice_task_service.create_from_voice.assert_awaited_once_with(
             user, mock_message.voice)
         self.sender.send_task_created.assert_awaited_once_with(
-            mock_message.chat.id, task)
+            mock_message.chat.id, task, reminders)
