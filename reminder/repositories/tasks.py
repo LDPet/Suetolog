@@ -75,3 +75,11 @@ class TaskRepository:
         task.status = status
         task.save(update_fields=["status"])
         return task
+
+    @staticmethod
+    def list_active_for_day(day: Date):
+        return list(
+            Task.objects.filter(
+                status=Task.Status.ACTIVE,
+                due_to__date=day,
+            ).select_related("user").order_by("due_to", "created_at"))

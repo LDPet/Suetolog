@@ -82,13 +82,9 @@ class TelegramSender:
         return await self._send_task_card_with_event(chat_id, task,
                                                      TaskCardVariant.EVENING)
 
-    async def send_digest(self, chat_id, tasks):
-        message_id = None
-        for task in tasks:
-            message_id = await self._send_task_card_with_event(
-                chat_id, task, TaskCardVariant.DIGEST)
-
-        return message_id
+    async def send_digest(self, chat_id, task):
+        return await self._send_task_card_with_event(chat_id, task,
+                                                     TaskCardVariant.DIGEST)
 
     async def _send_task_card_with_event(self, chat_id, task, variant):
         message_id = await self.send_task_card(chat_id, task, variant)

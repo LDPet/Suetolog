@@ -1,3 +1,7 @@
+from datetime import date as Date
+
+from django.utils import timezone
+
 from reminder.models import TaskEvent
 
 
@@ -24,3 +28,13 @@ class TaskEventRepository:
         return list(
             TaskEvent.objects.filter(
                 event_type=event_type).order_by("-created_at"))
+
+    @staticmethod
+    def get_task_ids_with_digest_sent_today(day: Date | None = None):
+        if day is None:
+            day = timezone.localdate()
+        return set(
+            TaskEvent.objects.filter(
+                event_type=TaskEvent.EventType.DIGEST_CARD_SENT,
+                created_at__date=day,
+            ).values_list("task_id", flat=True).distinct())
