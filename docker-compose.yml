@@ -1,3 +1,19 @@
+x-app-environment: &app-environment
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/0
+
+x-app-service: &app-service
+  image: suetolog-app:dev
+  env_file:
+    - .env
+  environment: *app-environment
+  profiles: ["app"]
+  init: true
+
 services:
   postgres:
     image: postgres:15-alpine
@@ -28,6 +44,58 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  migrate:
+    <<: *app-service
+    build:
+      context: .
+    environment:
+      <<: *app-environment
+      WAIT_FOR_REDIS: "0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "manage.py", "migrate", "--noinput"]
+    restart: "no"
+
+  bot:
+    <<: *app-service
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    command: ["python", "manage.py", "runbot"]
+    restart: unless-stopped
+
+  worker:
+    <<: *app-service
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    command:
+      ["celery", "-A", "config", "worker", "--loglevel=info", "--pool=solo"]
+    restart: unless-stopped
+
+  beat:
+    <<: *app-service
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    command:
+      [
+        "celery",
+        "-A",
+        "config",
+        "beat",
+        "--loglevel=info",
+        "--schedule=/tmp/celerybeat-schedule",
+      ]
+    restart: unless-stopped
 
 volumes:
   postgres_data:
