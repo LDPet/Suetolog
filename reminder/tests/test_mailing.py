@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from reminder.bot.formatting import format_task_due_to
 from reminder.bot.sender import TelegramSender
-from reminder.models import Reminder, Task, TaskEvent
+from reminder.models import Reminder, Task, TaskEvent, User
 from reminder.services.mailing import ReminderMailingService
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -30,6 +30,7 @@ def sender():
     sender = Mock()
     sender.send_reminder = AsyncMock(return_value=777)
     sender.send_digest = AsyncMock(return_value=888)
+    sender.send_evening_question = AsyncMock(return_value=778)
     return sender
 
 
@@ -461,3 +462,178 @@ async def test_morning_digest_accepts_datetime_and_uses_local_date(
 
     assert result["sent"] == 1
     sender.send_digest.assert_awaited_once_with(user.chat_id, task)
+
+
+@pytest.mark.asyncio
+async def test_evening_check_sends_card_and_sender_records_event(task, user):
+    today = timezone.localdate()
+    task.due_to = due_on(today, hour=10)
+    task.due_to_has_time = True
+    await db_call(
+        lambda: task.save(update_fields=["due_to", "due_to_has_time"]))
+    bot = Mock()
+    bot.send_message = AsyncMock(return_value=Mock(message_id=802))
+    service = ReminderMailingService(sender=TelegramSender(bot))
+
+    result = await service.send_evening_missed_check()
+
+    events = await db_call(lambda: list(
+        TaskEvent.objects.filter(
+            task=task,
+            event_type=TaskEvent.EventType.EVENING_QUESTION_SENT,
+        ).values_list("message_id", flat=True)))
+    send_call = bot.send_message.await_args.kwargs
+    buttons = send_call["reply_markup"].inline_keyboard[0]
+    assert result == {
+        "processed": 1,
+        "sent": 1,
+        "failed": 0,
+        "skipped": 0,
+    }
+    assert send_call["chat_id"] == user.chat_id
+    assert "Задача не выполнена" in send_call["text"]
+    assert buttons[0].callback_data == f"done:{task.id}"
+    assert buttons[1].callback_data == f"delete:{task.id}"
+    assert events == [802]
+
+
+@pytest.mark.asyncio
+async def test_evening_check_includes_task_without_reminder(task, user):
+    today = timezone.localdate()
+    task.due_to = due_on(today)
+    await db_call(lambda: task.save(update_fields=["due_to"]))
+
+    result = await ReminderMailingService(
+        sender=Mock(send_evening_question=AsyncMock(
+            return_value=810)), ).send_evening_missed_check()
+
+    assert result["sent"] == 1
+
+
+@pytest.mark.asyncio
+async def test_evening_check_skips_task_due_another_day(
+        mailing_service, sender, task):
+    tomorrow = timezone.localdate() + timedelta(days=1)
+    task.due_to = due_on(tomorrow)
+    await db_call(lambda: task.save(update_fields=["due_to"]))
+
+    result = await mailing_service.send_evening_missed_check()
+
+    assert result["processed"] == 0
+    sender.send_evening_question.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_repeated_evening_check_does_not_send_duplicate(user):
+    today = timezone.localdate()
+    task = await db_call(lambda: Task.objects.create(
+        user=user,
+        title="Вечер",
+        due_to=due_on(today),
+    ))
+    bot = Mock()
+    bot.send_message = AsyncMock(return_value=Mock(message_id=804))
+    service = ReminderMailingService(sender=TelegramSender(bot))
+
+    first = await service.send_evening_missed_check()
+    second = await service.send_evening_missed_check()
+
+    assert first["sent"] == 1
+    assert second == {
+        "processed": 1,
+        "sent": 0,
+        "failed": 0,
+        "skipped": 1,
+    }
+    assert bot.send_message.await_count == 1
+    assert await db_call(lambda: TaskEvent.objects.filter(
+        task=task,
+        event_type=TaskEvent.EventType.EVENING_QUESTION_SENT,
+    ).count()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [Task.Status.DONE, Task.Status.DELETED])
+async def test_evening_check_skips_task_closed_before_run(
+        mailing_service, sender, task, status):
+    today = timezone.localdate()
+    task.due_to = due_on(today)
+    task.status = status
+    await db_call(lambda: task.save(update_fields=["due_to", "status"]))
+
+    result = await mailing_service.send_evening_missed_check()
+
+    assert result["processed"] == 0
+    sender.send_evening_question.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_evening_check_empty_batch_is_silent(mailing_service, sender):
+    result = await mailing_service.send_evening_missed_check()
+
+    assert result == {
+        "processed": 0,
+        "sent": 0,
+        "failed": 0,
+        "skipped": 0,
+    }
+    sender.send_evening_question.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_evening_check_continues_after_telegram_error(
+        mailing_service, sender, user, caplog):
+    today = timezone.localdate()
+    first = await db_call(lambda: Task.objects.create(
+        user=user,
+        title="Падает",
+        due_to=due_on(today, hour=9),
+    ))
+    second_user = await db_call(lambda: User.objects.create(
+        chat_id=987654321,
+        telegram_user_id=123456789,
+    ))
+    second = await db_call(lambda: Task.objects.create(
+        user=second_user,
+        title="Ок",
+        due_to=due_on(today, hour=10),
+    ))
+    secret = "telegram-secret-token"
+    sender.send_evening_question.side_effect = [RuntimeError(secret), 808]
+
+    with caplog.at_level(logging.ERROR, logger="reminder.services.mailing"):
+        result = await mailing_service.send_evening_missed_check()
+
+    assert result == {
+        "processed": 2,
+        "sent": 1,
+        "failed": 1,
+        "skipped": 0,
+    }
+    assert sender.send_evening_question.await_count == 2
+    assert sender.send_evening_question.await_args_list[0].args == (
+        user.chat_id,
+        first,
+    )
+    assert sender.send_evening_question.await_args_list[1].args == (
+        second_user.chat_id,
+        second,
+    )
+    assert secret not in caplog.text
+    assert "Failed to deliver evening question" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_evening_check_treats_missing_message_id_as_failure(
+        mailing_service, sender, task, caplog):
+    today = timezone.localdate()
+    task.due_to = due_on(today)
+    await db_call(lambda: task.save(update_fields=["due_to"]))
+    sender.send_evening_question.return_value = None
+
+    with caplog.at_level(logging.ERROR, logger="reminder.services.mailing"):
+        result = await mailing_service.send_evening_missed_check()
+
+    assert result["sent"] == 0
+    assert result["failed"] == 1
+    assert "Telegram returned no message_id for evening question" in caplog.text

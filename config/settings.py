@@ -149,6 +149,10 @@ REMINDER_CHECK_INTERVAL_MINUTES = int(
 if REMINDER_CHECK_INTERVAL_MINUTES < 1:
     raise ValueError("REMINDER_CHECK_INTERVAL_MINUTES must be at least 1")
 
+EVENING_MISSED_CHECK_HOUR = int(os.getenv("EVENING_MISSED_CHECK_HOUR", "20"))
+if not 0 <= EVENING_MISSED_CHECK_HOUR <= 23:
+    raise ValueError("EVENING_MISSED_CHECK_HOUR must be between 0 and 23")
+
 CELERY_BROKER_URL = os.getenv(
     "CELERY_BROKER_URL",
     os.getenv("REDIS_URL", "redis://localhost:6379/0"),
@@ -167,5 +171,9 @@ CELERY_BEAT_SCHEDULE = {
     "send-morning-digest": {
         "task": "reminder.tasks.send_morning_digest",
         "schedule": crontab(minute=0, hour=MORNING_DIGEST_HOUR),
+    },
+    "send-evening-missed-check": {
+        "task": "reminder.tasks.send_evening_missed_check",
+        "schedule": crontab(hour=EVENING_MISSED_CHECK_HOUR, minute=0),
     },
 }
