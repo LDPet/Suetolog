@@ -20,58 +20,57 @@ Telegram-бот для проекта стажировки Иви-2026: поль
 
 Основная ценность MVP — Telegram-бот, который принимает голос или текст, превращает свободную русскую фразу в задачу, хранит её в PostgreSQL и сам напоминает в нужное время.
 
-## Быстрый старт (Docker)
-
-Требуются Docker Desktop с Compose v2 и `make`.
-
-```bash
-cp .env.example .env
-# Заполните DJANGO_SECRET_KEY и TELEGRAM_BOT_TOKEN в .env.
-make up
-make ps
-```
-
-`make up` собирает один образ приложения и запускает PostgreSQL, Redis, миграции,
-Telegram-бота, Celery worker и Celery Beat. Контейнер `migrate` должен завершиться
-с кодом `0`, остальные сервисы должны иметь состояние `Up`/`healthy`.
-
-```bash
-make logs                         # логи bot, worker и beat
-docker compose --profile app logs migrate  # результат применения миграций
-make down                         # остановить стек, сохранив данные PostgreSQL
-```
-
-Для голосового сценария дополнительно заполните `YANDEX_API_KEY` и
-`YANDEX_FOLDER_ID`. При `PARSER_BACKEND=mock` разбор задачи не требует вызова
-YandexGPT, но распознавание voice по-прежнему использует SpeechKit.
-
-## Разработка с pipenv на хосте
-
-Старый workflow сохранён: приложение работает на хосте, а в Docker запускаются
-только PostgreSQL и Redis. Значения `POSTGRES_HOST=localhost` и
-`REDIS_URL=redis://localhost:6379/0` из `.env.example` предназначены именно для
-этого режима.
+## Быстрый старт
 
 ```bash
 make install
-make up-infra
-make migrate
-pipenv run python manage.py runbot
+make test
+make check
 
-# В отдельных терминалах:
-make worker
-make beat
+cp .env.example .env
 ```
 
-Не запускайте Celery Beat одновременно на хосте и в Docker: два планировщика
-могут поставить одну и ту же job в очередь дважды.
+Все настраиваемые параметры проекта — интервалы Celery Beat, timezone, лимиты voice, провайдеры STT/parser, подключения к БД и Redis — задаются в `config/settings.py` (Django settings module). Это единственный источник правды для конфигурации: код и Celery читают значения оттуда, а не из разрозненных env-переменных в разных модулях.
 
-Проверки проекта по-прежнему выполняются на хосте и не требуют контейнеризации:
+`.env` — только секреты, которые нельзя коммитить в git (токены, API-ключи, пароль БД). При старте Django они читаются в `config/settings.py` через `os.environ` или `django-environ`.
+
+`config/settings.py` — все остальные параметры: `DEBUG`, подключение к PostgreSQL/Redis, timezone, интервалы Celery Beat, лимиты voice, провайдеры STT/parser и т.д. У tunable-констант есть значения по умолчанию прямо в файле.
+
+Минимальный `.env` для локального запуска:
+
+```env
+SECRET_KEY=change-me
+TELEGRAM_BOT_TOKEN=change-me
+DB_PASSWORD=suetolog
+YANDEX_FOLDER_ID=
+YANDEX_API_KEY=
+```
+
+Пример того, что задаётся в `config/settings.py`, а не в `.env`:
+
+```python
+DEBUG = True
+DB_NAME = 'suetolog'
+DB_HOST = 'localhost'
+REDIS_URL = 'redis://localhost:6379/0'
+DEFAULT_TIMEZONE = 'Europe/Moscow'
+REMINDER_CHECK_INTERVAL_MINUTES = 1
+```
+
+Полный список констант — в `[config/settings.py](config/settings.py)` (появится вместе с кодом) и в `[tz/ARCHITECTURE.md](tz/ARCHITECTURE.md#6-конфигурация-configsettingspy)`.
 
 ```bash
-make check
-make lint
-make test
+Команды ниже являются актуальными для MVP.
+python manage.py migrate
+python manage.py runbot
+make up
+make worker
+make beat
+
+pytest
+pytest --cov
+yapf -r -i .
+isort .
 ```
 
 ## Архитектура
@@ -105,67 +104,73 @@ make test
 
 Подробное описание полей, связей и ограничений приведено в `tz/tables.md`.
 
-## Docker: режимы и диагностика
+## Инфраструктура для разработки
 
-| Команда | Результат |
-|---|---|
-| `make up` | Полный MVP-стек в фоне с пересборкой образа |
-| `make up-infra` | Только PostgreSQL и Redis для приложения на хосте |
-| `make ps` | Состояние всех сервисов, включая one-shot `migrate` |
-| `make logs` | Поток логов bot, worker и beat |
-| `make down` | Остановка полного стека без удаления volumes |
-| `make migrate-docker` | Ручной запуск миграций в контейнере |
+Запуск PostgreSQL и Redis:
 
-Внутри Compose `POSTGRES_HOST` переопределяется на `postgres`, а `REDIS_URL` —
-на `redis://redis:6379/0`. Значения `localhost` внутри app-контейнеров не
-работают, потому что там они указывают на сам контейнер.
+```bash
+make up
+docker compose ps # убедиться, что контейнеры запустились и статус healthy
+```
 
-| Симптом | Что проверить |
-|---|---|
-| bot постоянно перезапускается | `docker compose --profile app logs migrate` и `docker compose --profile app logs bot`; наличие корректного токена в `.env` |
-| напоминания не приходят | `make ps`, затем `docker compose --profile app logs worker` и `docker compose --profile app logs beat` |
-| `connection refused` к PostgreSQL | внутри контейнера `POSTGRES_HOST` должен быть `postgres`, не `localhost` |
-| после `git pull` запускается старый код | повторить `make up` или `docker compose --profile app up -d --build` |
+После миграций запустите в отдельных терминалах Telegram-бота, Celery worker и
+Celery Beat:
 
-Для полного удаления локальных данных используйте
-`docker compose --profile app down -v`; обычный `make down` volumes сохраняет.
+```bash
+python manage.py runbot
+make worker
+make beat
+```
+
+Beat ставит `reminder.tasks.send_due_reminders` в очередь с интервалом
+`REMINDER_CHECK_INTERVAL_MINUTES` (по умолчанию одна минута). Worker подключается
+к Redis по `REDIS_URL` и отправляет наступившие напоминания как карточки задачи с
+кнопками `Сделано` и `Удалить`. После отправки сервис сохраняет `sent_time`,
+`message_id` и одно событие `reminder_sent`.
+
+Остановка:
+```bash
+make down
+```
 
 ## Как прогнать E2E
 
 Сценарий соответствует документу [`tz/use_cases.md`](tz/use_cases.md) и отчёту TG-10.
 
-1. Создать `.env`, заполнить Telegram-токен и Yandex credentials для voice.
+1. Запустить PostgreSQL и Redis:
 
 ```bash
 make up
 ```
 
-2. Убедиться, что миграции завершились, а процессы запущены:
+2. Создать `.env` и заполнить секреты.
+
+3. Выполнить миграции:
 
 ```bash
-make ps
-docker compose --profile app logs migrate
+python manage.py migrate
 ```
 
-3. Отправить боту `/start`, затем голосовое сообщение:
+4. В отдельных терминалах запустить Telegram-бота, Celery Worker и Celery Beat:
+
+```bash
+python manage.py runbot
+make worker
+make beat
+```
+
+5. Отправить боту сообщение:
 
 ```text
 Напомни завтра в 15:00 позвонить врачу
 ```
 
-4. Проверить:
+6. Проверить:
 
 - задача создана в БД;
 - создано напоминание;
 - в назначенное время бот отправил сообщение;
-- кнопки `Сделано` и `Удалить` изменяют состояние задачи.
-
-5. Перезапустить worker и убедиться, что он снова подключился к Redis:
-
-```bash
-docker compose --profile app restart worker
-docker compose --profile app logs worker
-```
+- после реакции пользователя состояние задачи изменилось.
 
 Подробные пользовательские сценарии приведены в `tz/use_cases.md`.
 
@@ -309,6 +314,7 @@ PR не должен висеть в **In review**, пока карточка е
 | `[tz/tz.md](tz/tz.md)`                               | Исходное ТЗ проекта: проблема, целевая аудитория, ключевая бизнес-логика и усложнения MVP.                |
 | `[tz/use_cases.md](tz/use_cases.md)`                 | Полный каталог пользовательских сценариев бота: команды, реакции, дайджесты, переносы и граничные случаи. |
 | `[tz/ARCHITECTURE.md](tz/ARCHITECTURE.md)`           | Архитектура системы: модули, слои, принципы разделения ответственности и точки расширения.                |
+| `[tz/ARCHITECTURE_ARTIFACTS.md](tz/ARCHITECTURE_ARTIFACTS.md)` | Актуальные ER-, service- и sequence-диаграммы, сверенные с моделями и сервисами MVP. |
 | `[tz/tables.md](tz/tables.md)`                       | Черновик модели данных: сущности `User`, `Task`, `Reminder`, `TaskEvent` и их поля.                       |
 | `[tz/VOICE_PIPELINES.md](tz/VOICE_PIPELINES.md)`     | Голосовой и текстовый пайплайн: STT, YandexGPT-парсер, контракты данных и обработка ошибок.               |
 | `[tz/MAILING_PIPELINES.md](tz/MAILING_PIPELINES.md)` | Фоновые рассылки через Celery: утренний дайджест, точечные напоминания, вечерний перенос.                 |

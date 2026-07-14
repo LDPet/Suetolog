@@ -1,0 +1,41 @@
+erDiagram
+    USER ||--o{ TASK : "owns"
+    TASK ||--o{ REMINDER : "schedules"
+    TASK ||--o{ TASK_EVENT : "records"
+
+    USER {
+        bigint id PK
+        bigint chat_id UK
+        bigint telegram_user_id UK
+        datetime created_at
+    }
+
+    TASK {
+        bigint id PK
+        bigint user_id FK
+        string title
+        text description
+        datetime due_to "nullable"
+        boolean due_to_has_time
+        string repeat_type "nullable"
+        int repeat_interval "nullable"
+        string status
+        datetime created_at
+    }
+
+    REMINDER {
+        bigint id PK
+        bigint task_id FK
+        datetime reminder_time
+        datetime sent_time "nullable"
+        string reaction "nullable"
+        bigint message_id UK "nullable"
+    }
+
+    TASK_EVENT {
+        bigint id PK
+        bigint task_id FK
+        string event_type
+        bigint message_id UK "nullable"
+        datetime created_at
+    }
