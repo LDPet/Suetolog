@@ -47,6 +47,36 @@ def future_at(hour: int = 15, days: int = 1) -> datetime:
     )
 
 
+def moscow_datetime(year: int,
+                    month: int,
+                    day: int,
+                    hour: int = 0,
+                    minute: int = 0) -> datetime:
+    return timezone.make_aware(
+        datetime(year, month, day, hour, minute),
+        timezone.get_default_timezone(),
+    )
+
+
+def configure_repeat(task: Task,
+                     due_to: datetime,
+                     repeat_type: str,
+                     repeat_interval: int = 1,
+                     *,
+                     due_to_has_time: bool = True) -> Task:
+    task.due_to = due_to
+    task.due_to_has_time = due_to_has_time
+    task.repeat_type = repeat_type
+    task.repeat_interval = repeat_interval
+    task.save(update_fields=[
+        "due_to",
+        "due_to_has_time",
+        "repeat_type",
+        "repeat_interval",
+    ])
+    return task
+
+
 def test_create_with_future_due_to_creates_task_reminder_and_event(
         service, user):
     due_to = future_at()
@@ -317,6 +347,225 @@ def test_mark_done_is_idempotent(service, user, task):
     assert completed.reminders.count() == 0
     assert completed.events.filter(
         event_type=TaskEvent.EventType.COMPLETED).count() == 1
+
+
+def test_mark_done_rolls_daily_task_to_next_occurrence(service, user, task,
+                                                       monkeypatch):
+    now = moscow_datetime(2026, 7, 14, 9)
+    due_to = moscow_datetime(2026, 7, 14, 10)
+    expected_due_to = moscow_datetime(2026, 7, 15, 10)
+    monkeypatch.setattr(timezone, "now", lambda: now)
+    configure_repeat(task, due_to, Task.RepeatType.DAILY)
+    old_reminder = Reminder.objects.create(task=task, reminder_time=due_to)
+
+    rolled = service.mark_done(user, task_id=task.id)
+
+    rolled.refresh_from_db()
+    assert rolled.status == Task.Status.ACTIVE
+    assert rolled.due_to == expected_due_to
+    assert not Reminder.objects.filter(id=old_reminder.id).exists()
+    assert rolled.reminders.get().reminder_time == expected_due_to
+    assert rolled.events.filter(
+        event_type=TaskEvent.EventType.COMPLETED).count() == 1
+    assert rolled.events.filter(
+        event_type=TaskEvent.EventType.RESCHEDULED).count() == 0
+
+
+def test_mark_done_fast_forwards_deeply_overdue_repeat(service, user, task,
+                                                       monkeypatch):
+    now = moscow_datetime(2026, 7, 13, 18)
+    due_to = moscow_datetime(2026, 7, 10, 10)
+    expected_due_to = moscow_datetime(2026, 7, 14, 10)
+    monkeypatch.setattr(timezone, "now", lambda: now)
+    configure_repeat(task, due_to, Task.RepeatType.DAILY)
+    Reminder.objects.create(task=task, reminder_time=due_to)
+
+    rolled = service.mark_done(user, task_id=task.id)
+
+    rolled.refresh_from_db()
+    pending = rolled.reminders.filter(sent_time__isnull=True)
+    assert rolled.due_to == expected_due_to
+    assert pending.count() == 1
+    assert pending.get().reminder_time == expected_due_to
+    assert rolled.events.filter(
+        event_type=TaskEvent.EventType.COMPLETED).count() == 1
+
+
+def test_weekly_rollover_preserves_weekday_and_time(service, user, task,
+                                                    monkeypatch):
+    now = moscow_datetime(2026, 7, 15, 12)
+    due_to = moscow_datetime(2026, 7, 6, 9, 30)
+    expected_due_to = moscow_datetime(2026, 7, 20, 9, 30)
+    monkeypatch.setattr(timezone, "now", lambda: now)
+    configure_repeat(task, due_to, Task.RepeatType.WEEKLY)
+
+    rolled = service.mark_done(user, task_id=task.id)
+
+    rolled.refresh_from_db()
+    local_due_to = timezone.localtime(rolled.due_to)
+    assert rolled.due_to == expected_due_to
+    assert local_due_to.weekday() == timezone.localtime(due_to).weekday()
+    assert (local_due_to.hour, local_due_to.minute) == (9, 30)
+
+
+@pytest.mark.parametrize(
+    ("repeat_type", "repeat_interval", "due_to", "now", "expected"),
+    [
+        (
+            Task.RepeatType.MINUTELY,
+            2,
+            moscow_datetime(2026, 7, 14, 10),
+            moscow_datetime(2026, 7, 14, 10, 5),
+            moscow_datetime(2026, 7, 14, 10, 6),
+        ),
+        (
+            Task.RepeatType.HOURLY,
+            3,
+            moscow_datetime(2026, 7, 14, 10),
+            moscow_datetime(2026, 7, 14, 15),
+            moscow_datetime(2026, 7, 14, 16),
+        ),
+        (
+            Task.RepeatType.DAILY,
+            2,
+            moscow_datetime(2026, 7, 10, 10),
+            moscow_datetime(2026, 7, 13, 10),
+            moscow_datetime(2026, 7, 14, 10),
+        ),
+        (
+            Task.RepeatType.WEEKLY,
+            2,
+            moscow_datetime(2026, 7, 6, 9),
+            moscow_datetime(2026, 7, 20, 9),
+            moscow_datetime(2026, 8, 3, 9),
+        ),
+        (
+            Task.RepeatType.MONTHLY,
+            1,
+            moscow_datetime(2026, 1, 31, 10),
+            moscow_datetime(2026, 2, 28, 10),
+            moscow_datetime(2026, 3, 31, 10),
+        ),
+    ],
+)
+def test_next_repeat_due_supports_every_repeat_type(service, repeat_type,
+                                                    repeat_interval, due_to,
+                                                    now, expected):
+    assert service._next_repeat_due(
+        due_to,
+        repeat_type,
+        repeat_interval,
+        now=now,
+    ) == expected
+
+
+def test_repeated_done_for_same_reminder_is_noop(service, user, task,
+                                                 monkeypatch):
+    now = moscow_datetime(2026, 7, 13, 18)
+    due_to = moscow_datetime(2026, 7, 10, 10)
+    expected_due_to = moscow_datetime(2026, 7, 14, 10)
+    monkeypatch.setattr(timezone, "now", lambda: now)
+    configure_repeat(task, due_to, Task.RepeatType.DAILY)
+    sent_reminder = Reminder.objects.create(
+        task=task,
+        reminder_time=due_to,
+        sent_time=due_to,
+        message_id=98765,
+    )
+
+    first = service.mark_done(user, reminder=sent_reminder)
+    second = service.mark_done(user, reminder=sent_reminder)
+
+    first.refresh_from_db()
+    second.refresh_from_db()
+    sent_reminder.refresh_from_db()
+    assert first.due_to == expected_due_to
+    assert second.due_to == expected_due_to
+    assert sent_reminder.reaction == Task.Status.DONE
+    assert task.reminders.filter(sent_time__isnull=True).count() == 1
+    assert task.events.filter(
+        event_type=TaskEvent.EventType.COMPLETED).count() == 1
+
+
+@pytest.mark.parametrize(
+    ("method_name", "expected_status", "event_type"),
+    [
+        (
+            "mark_cancelled",
+            Task.Status.CANCELLED,
+            TaskEvent.EventType.CANCELLED,
+        ),
+        (
+            "delete_task",
+            Task.Status.DELETED,
+            TaskEvent.EventType.DELETED,
+        ),
+    ],
+)
+def test_cancel_or_delete_stops_repeating_series(service, user, task,
+                                                 method_name, expected_status,
+                                                 event_type):
+    due_to = future_at()
+    configure_repeat(task, due_to, Task.RepeatType.DAILY)
+    Reminder.objects.create(task=task, reminder_time=due_to)
+
+    final_task = getattr(service, method_name)(user, task_id=task.id)
+
+    final_task.refresh_from_db()
+    assert final_task.status == expected_status
+    assert final_task.reminders.filter(sent_time__isnull=True).count() == 0
+    assert final_task.events.filter(event_type=event_type).count() == 1
+
+
+def test_date_only_repeat_rolls_without_creating_reminder(
+        service, user, task, monkeypatch):
+    now = moscow_datetime(2026, 7, 14, 12)
+    due_to = moscow_datetime(2026, 7, 14)
+    expected_due_to = moscow_datetime(2026, 7, 15)
+    monkeypatch.setattr(timezone, "now", lambda: now)
+    configure_repeat(
+        task,
+        due_to,
+        Task.RepeatType.DAILY,
+        due_to_has_time=False,
+    )
+
+    rolled = service.mark_done(user, task_id=task.id)
+
+    rolled.refresh_from_db()
+    assert rolled.status == Task.Status.ACTIVE
+    assert rolled.due_to == expected_due_to
+    assert rolled.reminders.count() == 0
+
+
+def test_repeat_rollover_rolls_back_when_event_creation_fails(
+        service, user, task, monkeypatch):
+    now = moscow_datetime(2026, 7, 13, 18)
+    due_to = moscow_datetime(2026, 7, 10, 10)
+    monkeypatch.setattr(timezone, "now", lambda: now)
+    configure_repeat(task, due_to, Task.RepeatType.DAILY)
+    sent_reminder = Reminder.objects.create(
+        task=task,
+        reminder_time=due_to,
+        sent_time=due_to,
+        message_id=87654,
+    )
+    monkeypatch.setattr(
+        TaskEventRepository,
+        "create",
+        Mock(side_effect=RuntimeError("Event storage failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="Event storage failed"):
+        service.mark_done(user, reminder=sent_reminder)
+
+    task.refresh_from_db()
+    sent_reminder.refresh_from_db()
+    assert task.status == Task.Status.ACTIVE
+    assert task.due_to == due_to
+    assert sent_reminder.reaction is None
+    assert task.reminders.filter(sent_time__isnull=True).count() == 0
+    assert task.events.count() == 0
 
 
 def test_mark_cancelled_accepts_reminder(service, user, task):

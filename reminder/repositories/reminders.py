@@ -22,6 +22,13 @@ class ReminderRepository:
             return None
 
     @staticmethod
+    def get_by_id_for_update(reminder_id: int) -> Reminder | None:
+        try:
+            return Reminder.objects.select_for_update().get(id=reminder_id)
+        except Reminder.DoesNotExist:
+            return None
+
+    @staticmethod
     def get_due_reminders(now: datetime = None) -> list[Reminder]:
         if now is None:
             now = timezone.now()
@@ -40,6 +47,12 @@ class ReminderRepository:
             return None
         reminder.reaction = reaction
         reminder.save(update_fields=['reaction'])
+        return reminder
+
+    @staticmethod
+    def update_reaction(reminder: Reminder, reaction: str) -> Reminder:
+        reminder.reaction = reaction
+        reminder.save(update_fields=["reaction"])
         return reminder
 
     @staticmethod
