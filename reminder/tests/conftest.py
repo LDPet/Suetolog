@@ -18,6 +18,8 @@ def task(db, user) -> Task:
         title="Test Task",
         description="Some description",
         due_to=None,
+        repeat_type=None,
+        repeat_interval=None,
         status=Task.Status.ACTIVE,
     )
 

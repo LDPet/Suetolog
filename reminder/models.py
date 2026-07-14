@@ -24,6 +24,7 @@ class Task(models.Model):
         HOURLY = "hourly", "Каждый час"
         DAILY = "daily", "Ежедневно"
         WEEKLY = "weekly", "Еженедельно"
+        MONTHLY = "monthly", "Ежемесячно"
 
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True, default="")

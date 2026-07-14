@@ -25,6 +25,7 @@ _REPEAT_LABELS = {
     Task.RepeatType.HOURLY: "каждый час",
     Task.RepeatType.DAILY: "ежедневно",
     Task.RepeatType.WEEKLY: "еженедельно",
+    Task.RepeatType.MONTHLY: "ежемесячно",
 }
 
 

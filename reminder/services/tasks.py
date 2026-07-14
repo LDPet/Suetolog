@@ -1,7 +1,8 @@
 """Business rules for creating and mutating tasks."""
 
+from calendar import monthrange
 from datetime import date as Date
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from django.db import transaction
 from django.utils import timezone
@@ -97,13 +98,7 @@ class TaskService:
                   user: User,
                   task_id: int | None = None,
                   reminder: Reminder | None = None) -> Task:
-        return self._mark_final(
-            user,
-            task_id,
-            reminder,
-            Task.Status.DONE,
-            TaskEvent.EventType.COMPLETED,
-        )
+        return self._mark_done(user, task_id, reminder)
 
     def mark_cancelled(self,
                        user: User,
@@ -116,6 +111,33 @@ class TaskService:
             Task.Status.CANCELLED,
             TaskEvent.EventType.CANCELLED,
         )
+
+    @transaction.atomic
+    def _mark_done(self, user: User, task_id: int | None,
+                   reminder: Reminder | None) -> Task:
+        resolved_task_id = self._resolve_task_id(task_id, reminder)
+        task = self._get_owned_task_for_update(user, resolved_task_id)
+
+        stored_reminder = None
+        if reminder is not None:
+            stored_reminder = ReminderRepository.get_by_id_for_update(
+                reminder.id)
+            if (stored_reminder is None or stored_reminder.task_id != task.id
+                    or stored_reminder.reaction is not None):
+                return task
+
+        if task.status != Task.Status.ACTIVE:
+            return task
+
+        if stored_reminder is not None:
+            ReminderRepository.update_reaction(stored_reminder,
+                                               Task.Status.DONE)
+
+        if task.repeat_type is None:
+            return self._set_final_status(task, Task.Status.DONE,
+                                          TaskEvent.EventType.COMPLETED)
+
+        return self._rollover_repeating_task(task)
 
     @transaction.atomic
     def _mark_final(self, user: User, task_id: int | None,
@@ -161,6 +183,72 @@ class TaskService:
         )
         TaskEventRepository.create(task=task, event_type=event_type)
         return task
+
+    @classmethod
+    def _rollover_repeating_task(cls, task: Task) -> Task:
+        """Record one completed occurrence and plan the next one."""
+        next_due_to = cls._next_repeat_due(
+            task.due_to,
+            task.repeat_type,
+            task.repeat_interval,
+            now=timezone.now(),
+        )
+        return cls._change_due_to(
+            task,
+            next_due_to,
+            task.due_to_has_time,
+            TaskEvent.EventType.COMPLETED,
+        )
+
+    @staticmethod
+    def _next_repeat_due(due_to: datetime | None, repeat_type: str,
+                         repeat_interval: int | None, *,
+                         now: datetime) -> datetime:
+        if due_to is None:
+            raise TaskStateError("Repeating task must have a due date.")
+        if timezone.is_naive(due_to) or timezone.is_naive(now):
+            raise TaskStateError("Repeat dates must be timezone-aware.")
+        if repeat_interval is None or repeat_interval < 1:
+            raise TaskStateError("Repeat interval must be positive.")
+
+        current_timezone = timezone.get_default_timezone()
+        anchor = timezone.localtime(due_to, current_timezone)
+        current = timezone.localtime(now, current_timezone)
+        fixed_steps = {
+            Task.RepeatType.MINUTELY: timedelta(minutes=repeat_interval),
+            Task.RepeatType.HOURLY: timedelta(hours=repeat_interval),
+            Task.RepeatType.DAILY: timedelta(days=repeat_interval),
+            Task.RepeatType.WEEKLY: timedelta(weeks=repeat_interval),
+        }
+
+        if repeat_type in fixed_steps:
+            step = fixed_steps[repeat_type]
+            occurrences = 1
+            if anchor <= current:
+                occurrences = ((current - anchor) // step) + 1
+            return anchor + step * occurrences
+
+        if repeat_type == Task.RepeatType.MONTHLY:
+            months_since_anchor = ((current.year - anchor.year) * 12 +
+                                   current.month - anchor.month)
+            occurrence = max(1, months_since_anchor // repeat_interval)
+            candidate = TaskService._add_months(anchor,
+                                                occurrence * repeat_interval)
+            while candidate <= current:
+                occurrence += 1
+                candidate = TaskService._add_months(
+                    anchor, occurrence * repeat_interval)
+            return candidate
+
+        raise TaskStateError(f"Unsupported repeat type: {repeat_type}.")
+
+    @staticmethod
+    def _add_months(value: datetime, months: int) -> datetime:
+        month_index = value.year * 12 + value.month - 1 + months
+        year, zero_based_month = divmod(month_index, 12)
+        month = zero_based_month + 1
+        day = min(value.day, monthrange(year, month)[1])
+        return value.replace(year=year, month=month, day=day)
 
     @staticmethod
     def _set_final_status(task: Task, status: str, event_type: str) -> Task:
