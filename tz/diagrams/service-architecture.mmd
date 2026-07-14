@@ -1,0 +1,77 @@
+flowchart TB
+    telegram_api["Telegram Bot API"]
+    speechkit["Yandex SpeechKit STT"]
+    foundation_models["Yandex Foundation Models"]
+    postgres[("PostgreSQL")]
+    redis[("Redis broker")]
+
+    subgraph telegram_layer["Telegram-слой"]
+        dispatcher["aiogram Dispatcher"]
+        handlers["Handlers: start, voice, undated, date_reply, callbacks"]
+        sender["TelegramSender"]
+        downloader["TelegramFileDownloader"]
+    end
+
+    subgraph application_layer["Сервисный слой"]
+        user_service["UserService"]
+        voice_service["VoiceTaskCreationService"]
+        task_service["TaskService"]
+        reminder_service["ReminderService"]
+        mailing_service["ReminderMailingService"]
+    end
+
+    subgraph ai_layer["AI-слой"]
+        stt_service["YandexSpeechKitSTTService"]
+        task_parser["TaskParser factory: mock or YandexGPTTaskParser"]
+        date_parser["YandexGPTDateParser"]
+        fm_client["YandexFoundationModelsClient"]
+    end
+
+    subgraph background_layer["Фоновые процессы"]
+        beat["Celery Beat"]
+        worker["Celery Worker"]
+        due_task["reminder.tasks.send_due_reminders"]
+    end
+
+    subgraph persistence_layer["Доступ к данным"]
+        repositories["UserRepository, TaskRepository, ReminderRepository, TaskEventRepository"]
+        atomic_bundle["create_task_with_reminder_and_event"]
+        orm["Django ORM models"]
+    end
+
+    telegram_api --> dispatcher
+    dispatcher --> handlers
+    handlers --> user_service
+    handlers --> voice_service
+    handlers --> task_service
+    handlers --> reminder_service
+    handlers --> date_parser
+    handlers --> sender
+
+    voice_service --> downloader
+    downloader --> telegram_api
+    voice_service --> stt_service
+    voice_service --> task_parser
+    voice_service --> task_service
+    stt_service --> speechkit
+    task_parser -. "date_hint" .-> date_parser
+    task_parser -. "yandex backend" .-> fm_client
+    date_parser --> fm_client
+    fm_client --> foundation_models
+
+    beat --> redis
+    redis --> worker
+    worker --> due_task
+    due_task --> mailing_service
+    mailing_service --> reminder_service
+    mailing_service --> sender
+    sender --> telegram_api
+
+    user_service --> repositories
+    task_service --> repositories
+    task_service --> atomic_bundle
+    reminder_service --> repositories
+    sender --> repositories
+    repositories --> orm
+    atomic_bundle --> orm
+    orm --> postgres

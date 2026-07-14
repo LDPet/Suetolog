@@ -1,0 +1,65 @@
+sequenceDiagram
+    autonumber
+    actor User as Пользователь
+    participant TG as Telegram Bot API
+    participant Handler as Voice handler
+    participant Users as UserService
+    participant Sender as TelegramSender
+    participant Voice as VoiceTaskCreationService
+    participant Files as TelegramFileDownloader
+    participant STT as SpeechKit STT
+    participant Parser as TaskParser
+    participant Date as DateParser
+    participant Tasks as TaskService
+    participant DB as PostgreSQL
+    participant Beat as Celery Beat
+    participant Redis as Redis
+    participant Worker as Celery Worker
+    participant Mailing as ReminderMailingService
+    participant Reminders as ReminderService
+
+    User->>TG: Voice в формате OGG Opus
+    TG->>Handler: Message.voice
+    Handler->>Users: get_or_create_user(chat_id, telegram_user_id)
+    Users->>DB: Найти или создать User
+    DB-->>Users: User
+    Handler->>Sender: send_processing(chat_id)
+    Sender->>TG: «Слушаю...»
+    Handler->>Voice: create_from_voice(user, voice)
+    Voice->>Files: validate_voice() и download_voice(file_id)
+    Files->>TG: Скачать Telegram file
+    TG-->>Files: Временный OGG-файл
+    Files-->>Voice: path
+    Voice->>STT: transcribe(path)
+    STT-->>Voice: STTResult(text, ru-RU)
+    Voice->>Parser: get_parser().parse_task(text)
+    opt semantic parser вернул date_hint
+        Parser->>Date: parse_date(date_hint)
+        Date-->>Parser: ParsedDateResult
+    end
+    Parser-->>Voice: ParsedTaskInput
+    Voice->>Tasks: create_from_parsed(user, parsed)
+    Tasks->>DB: atomic Task + optional Reminder + TaskEvent(created)
+    DB-->>Tasks: Task
+    Tasks-->>Voice: Task
+    Voice->>Files: delete_voice(path) в finally
+    Voice-->>Handler: VoiceTaskResult(success, task)
+    Handler->>Sender: send_task_created(chat_id, task)
+    Sender->>TG: Подтверждение
+    TG-->>User: Задача создана
+
+    Note over Beat,Worker: Каждые REMINDER_CHECK_INTERVAL_MINUTES
+    Beat->>Redis: Опубликовать send_due_reminders
+    Redis->>Worker: Выдать job
+    Worker->>Mailing: send_due_reminders()
+    Mailing->>Reminders: get_due_reminders(now, batch limit)
+    Reminders->>DB: active + due + sent_time IS NULL
+    DB-->>Reminders: Пачка Reminder
+    Reminders-->>Mailing: reminders
+    Mailing->>Sender: send_reminder(chat_id, task)
+    Sender->>TG: Карточка с кнопками «Сделано» и «Удалить»
+    TG-->>User: Точечное напоминание
+    TG-->>Sender: message_id
+    Sender-->>Mailing: message_id
+    Mailing->>Reminders: mark_sent(reminder, message_id)
+    Reminders->>DB: atomic sent_time + message_id + TaskEvent(reminder_sent)
