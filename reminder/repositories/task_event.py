@@ -38,3 +38,13 @@ class TaskEventRepository:
                 event_type=TaskEvent.EventType.DIGEST_CARD_SENT,
                 created_at__date=day,
             ).values_list("task_id", flat=True).distinct())
+
+    @staticmethod
+    def get_task_ids_with_evening_question_sent_today(day: Date | None = None):
+        if day is None:
+            day = timezone.localdate()
+        return set(
+            TaskEvent.objects.filter(
+                event_type=TaskEvent.EventType.EVENING_QUESTION_SENT,
+                created_at__date=day,
+            ).values_list("task_id", flat=True).distinct())

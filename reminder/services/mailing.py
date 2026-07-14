@@ -137,6 +137,58 @@ class ReminderMailingService:
 
         return result
 
+    async def send_evening_missed_check(
+        self,
+        now: datetime | Date | None = None,
+    ) -> dict[str, int]:
+        """Отправить вечерний вопрос по активным задачам на сегодня."""
+        today = self._resolve_today(now)
+        sent_task_ids = await sync_to_async(
+            TaskEventRepository.get_task_ids_with_evening_question_sent_today,
+            thread_sensitive=True,
+        )(today)
+        tasks = await sync_to_async(
+            self._task_service.list_active_for_day,
+            thread_sensitive=True,
+        )(day=today)
+        result = {
+            "processed": len(tasks),
+            "sent": 0,
+            "failed": 0,
+            "skipped": 0,
+        }
+
+        for task in tasks:
+            if task.id in sent_task_ids:
+                result["skipped"] += 1
+                continue
+
+            try:
+                message_id = await self._sender.send_evening_question(
+                    task.user.chat_id,
+                    task,
+                )
+            except Exception:
+                result["failed"] += 1
+                logger.error(
+                    "Failed to deliver evening question | task_id=%s",
+                    task.id,
+                )
+                continue
+
+            if message_id is None:
+                result["failed"] += 1
+                logger.error(
+                    "Telegram returned no message_id for evening question | "
+                    "task_id=%s",
+                    task.id,
+                )
+                continue
+
+            result["sent"] += 1
+
+        return result
+
     @staticmethod
     def _resolve_today(now: datetime | Date | None) -> Date:
         if isinstance(now, datetime):
