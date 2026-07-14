@@ -1,0 +1,17 @@
+.env
+.git
+.github
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.coverage
+htmlcov
+media/
+staticfiles/
+*.ogg
+celerybeat-schedule*
+.gh_sync/
+.idea/
+.vscode/

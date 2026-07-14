@@ -1,6 +1,7 @@
-.PHONY: install check lint test format fix up down migrate worker beat
+.PHONY: install check lint test format fix up up-infra down logs ps migrate migrate-docker worker beat
 
 PIPENV = pipenv
+DOCKER_COMPOSE = docker compose
 PY_FILES := $(shell git ls-files '*.py')
 
 install:
@@ -24,13 +25,25 @@ fix: format
 
 
 up:
-	docker compose up -d
+	$(DOCKER_COMPOSE) --profile app up -d --build
+
+up-infra:
+	$(DOCKER_COMPOSE) up -d postgres redis
+
 down:
-	docker compose down
+	$(DOCKER_COMPOSE) --profile app down
+
 logs:
-	docker compose logs -f
+	$(DOCKER_COMPOSE) --profile app logs -f bot worker beat
+
+ps:
+	$(DOCKER_COMPOSE) --profile app ps -a
+
 migrate:
-	python manage.py migrate
+	$(PIPENV) run python manage.py migrate
+
+migrate-docker:
+	$(DOCKER_COMPOSE) --profile app run --rm migrate
 
 worker:
 	$(PIPENV) run celery -A config worker --loglevel=info --pool=solo
